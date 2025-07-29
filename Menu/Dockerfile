@@ -7,7 +7,7 @@ WORKDIR /src
 
 COPY . .
 
-RUN dotnet publish "Restaurant-Menu.csproj" -c Release -o /app/publish
+RUN dotnet publish "Menu.csproj" -c Release -o /app/publish
 
 FROM base AS final
 WORKDIR /app
@@ -16,4 +16,4 @@ COPY --from=build /app/publish .
 # ✅ Allow external traffic on port 80
 EXPOSE 80
 
-ENTRYPOINT ["dotnet", "Restaurant-Menu.dll"]
+ENTRYPOINT ["dotnet", "Menu.dll"]
