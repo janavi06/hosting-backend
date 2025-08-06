@@ -1,4 +1,4 @@
-﻿// Program.cs  –  run cleanly on *any* local machine
+﻿// Program.cs  –  run cleanly on *any* local machine and Render
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
@@ -19,8 +19,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(
         "http://localhost:4200",
-        "https://scanui.netlify.app",
-        "https://menu-view.netlify.app")
+        "https://scanui.netlify.app")
     .AllowAnyHeader()
     .AllowAnyMethod()
     .AllowCredentials()));
@@ -85,7 +84,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-/*──────────────────────── 8. Host URLs (local‑friendly) ─*/
+/*──────────────────────── 8. Host URLs ──────────────────*/
 var portEnv = Environment.GetEnvironmentVariable("PORT");          // e.g. Render
 var urlsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_URLS"); // VS / dotnet run
 
@@ -117,7 +116,17 @@ app.Map("/error", a => a.Run(async ctx =>
     await ctx.Response.WriteAsJsonAsync(new { error = ex?.Message });
 }));
 
-app.UseHttpsRedirection();
+/*──────────────────────── FIX FOR RENDER ──────────────────────*/
+// Removed app.UseHttpsRedirection(); (causes deployment timeout on Render)
+if (!app.Environment.IsDevelopment())
+{
+    app.Use(async (context, next) =>
+    {
+        context.Request.Scheme = "https"; // force HTTPS scheme when hosted behind Render proxy
+        await next();
+    });
+}
+
 app.UseStaticFiles();
 app.UseRouting();
 app.UseCors();
@@ -127,6 +136,10 @@ app.UseAuthorization();
 /*──────────── Endpoints ────────────*/
 app.MapControllers();
 app.MapHub<OrderHub>("/hubs/order");
+
+/* ✅ Render Health Check Route */
+app.MapGet("/", () => "✅ ScanUI backend is running!");
+
 app.MapFallbackToFile("index.html");
 
 app.Run();
