@@ -13,7 +13,11 @@ namespace Restaurant_Menu.Models
         Completed,    // Payment done, order closed
         Cancelled     // Order cancelled
     }
-
+    public enum OrderSource           // 🌟 NEW
+    {
+        QR = 0,
+        Waiter = 1
+    }
     public enum KitchenStatus
     {
         Pending,      // Order received but not started
@@ -38,6 +42,7 @@ namespace Restaurant_Menu.Models
         public decimal ServiceCharge { get; set; }    // e.g., 5 means 5%
         public decimal Subtotal { get; set; }
         public decimal TotalAmount { get; set; }
+        public OrderSource Source { get; set; } = OrderSource.QR;   // 🌟 NEW
 
         public DateTime? ClosedAt { get; set; } // Nullable for orders that aren't closed
         public DateTime CreatedAt { get; set; }

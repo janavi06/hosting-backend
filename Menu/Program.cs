@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿// Program.cs  –  run cleanly on *any* local machine
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -13,44 +14,34 @@ using System.Text.Json.Serialization;
 QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
-// Force Git change - testing CORS redeploy
 
-// ✅ 1. CORS – Use default policy with all required origins
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-    {
-        policy.WithOrigins(
-            "http://localhost:4200",
-            "https://scanui.netlify.app",
-            "https://menu-view.netlify.app"
-        )
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
-    });
-});
+/*──────────────────────── 1. CORS ────────────────────────*/
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
+    .WithOrigins(
+        "http://localhost:4200",
+        "https://scanui.netlify.app",
+        "https://menu-view.netlify.app")
+    .AllowAnyHeader()
+    .AllowAnyMethod()
+    .AllowCredentials()));
 
-// ✅ 2. SignalR
+/*──────────────────────── 2. SignalR ─────────────────────*/
 builder.Services.AddSignalR();
 
-// ✅ 3. Controllers + JSON config
+/*──────────────────────── 3. MVC / JSON ──────────────────*/
 builder.Services.AddControllers()
-    .AddJsonOptions(opts =>
-    {
-        opts.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
-    });
+                .AddJsonOptions(o => o.JsonSerializerOptions.ReferenceHandler =
+                                     ReferenceHandler.IgnoreCycles);
 
-// ✅ 4. Swagger
+/*──────────────────────── 4. Swagger ─────────────────────*/
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ✅ 5. DB
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString));
+/*──────────────────────── 5. Database ────────────────────*/
+var conn = builder.Configuration.GetConnectionString("DefaultConnection");
+builder.Services.AddDbContext<ApplicationDbContext>(opt => opt.UseNpgsql(conn));
 
-// ✅ 6. Repositories
+/*──────────────────────── 6. DI (Repositories) ───────────*/
 builder.Services.AddScoped<IOrderItemRepository, OrderItemRepository>();
 builder.Services.AddScoped<IRestaurantTableRepository, RestaurantTableRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
@@ -60,14 +51,14 @@ builder.Services.AddScoped<ICategoryRepository, CategoryRepository>();
 builder.Services.AddScoped<ISubCategoryRepository, SubCategoryRepository>();
 builder.Services.AddScoped<IOfferRepository, OfferRepository>();
 
-// ✅ 7. JWT Authentication
-var jwtSecret = builder.Configuration["Jwt:Key"] ?? "your-secret-key";
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "YourAppName";
+/*──────────────────────── 7. JWT ─────────────────────────*/
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "super-secret-key";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "Restaurant-Menu";
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+    .AddJwtBearer(opt =>
     {
-        options.TokenValidationParameters = new TokenValidationParameters
+        opt.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
             ValidateAudience = true,
@@ -75,22 +66,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtIssuer,
             ValidAudience = jwtIssuer,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
         };
 
-        // ✅ SignalR token support
-        options.Events = new JwtBearerEvents
+        /* SignalR query‑string token */
+        opt.Events = new JwtBearerEvents
         {
-            OnMessageReceived = context =>
+            OnMessageReceived = ctx =>
             {
-                var accessToken = context.Request.Query["access_token"];
-                var path = context.HttpContext.Request.Path;
-
-                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs/order"))
-                {
-                    context.Token = accessToken;
-                }
-
+                var token = ctx.Request.Query["access_token"];
+                var path = ctx.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(token) && path.StartsWithSegments("/hubs/order"))
+                    ctx.Token = token;
                 return Task.CompletedTask;
             }
         };
@@ -98,53 +85,48 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// ✅ 8. Set port for Render
-var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
-builder.WebHost.ConfigureKestrel(serverOptions =>
-{
-    serverOptions.ListenAnyIP(int.Parse(port));
-});
+/*──────────────────────── 8. Host URLs (local‑friendly) ─*/
+var portEnv = Environment.GetEnvironmentVariable("PORT");          // e.g. Render
+var urlsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_URLS"); // VS / dotnet run
 
+if (string.IsNullOrWhiteSpace(urlsEnv) && string.IsNullOrWhiteSpace(portEnv))
+{
+    // fallback for plain `dotnet run`
+    builder.WebHost.UseUrls("http://localhost:5088", "https://localhost:5001");
+}
+else if (!string.IsNullOrWhiteSpace(portEnv))
+{
+    builder.WebHost.UseUrls($"http://*:{portEnv}");
+}
+
+/*──────────────────────── BUILD ──────────────────────────*/
 var app = builder.Build();
-app.UseCors();
 
-// ✅ 9. Swagger
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+/* Swagger only in dev */
+if (app.Environment.IsDevelopment())
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Restaurant-Menu API v1");
-});
+    app.UseSwagger();
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Restaurant‑Menu API v1"));
+}
 
-// ✅ 10. Exception Handling
+/* Global JSON error response */
 app.UseExceptionHandler("/error");
-app.Map("/error", ap => ap.Run(async context =>
+app.Map("/error", a => a.Run(async ctx =>
 {
-    var feature = context.Features.Get<IExceptionHandlerFeature>();
-    var exception = feature?.Error;
-    await context.Response.WriteAsJsonAsync(new
-    {
-        error = exception?.Message,
-        details = exception?.StackTrace
-    });
+    var ex = ctx.Features.Get<IExceptionHandlerFeature>()?.Error;
+    await ctx.Response.WriteAsJsonAsync(new { error = ex?.Message });
 }));
 
-// ✅ 11. Standard Middleware Order (no manual CORS block)
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
-app.UseCors(); // ✅ Use built-in CORS
-
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// ✅ 12. Endpoints
-app.UseEndpoints(endpoints =>
-{
-    endpoints.MapControllers();
-    endpoints.MapHub<OrderHub>("/hubs/order");
-});
-
-// ✅ 13. Fallback for SPA
+/*──────────── Endpoints ────────────*/
+app.MapControllers();
+app.MapHub<OrderHub>("/hubs/order");
 app.MapFallbackToFile("index.html");
 
 app.Run();

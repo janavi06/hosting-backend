@@ -176,6 +176,9 @@ public class ApplicationDbContext : DbContext
                   .WithMany()
                   .HasForeignKey(e => e.RestaurantID)
                   .OnDelete(DeleteBehavior.Restrict);
+            entity.Property(e => e.Source)
+                  .HasColumnName("source")
+                  .HasConversion<int>();
 
 
         });
@@ -197,6 +200,7 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.IsPrepared).HasColumnName("isprepared").HasDefaultValue(false);
             entity.Property(e => e.AddedToKitchenAt).HasColumnName("addedtokitchenat").HasColumnType("timestamptz").HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.Property(e => e.BatchID).HasColumnName("batchid").HasDefaultValue(1);
+          
 
 
             entity.Property(e => e.PreparedAt)

@@ -36,87 +36,122 @@ public class OrderController : ControllerBase
     }
 
     [HttpPost("generate")]
-    public async Task<ActionResult<Order>> GenerateOrder(
-      [FromQuery] int? tableNo,
-      [FromQuery] int restaurantId,  // ✅ added
-      [FromBody] Order orderData)
+    public async Task<ActionResult> GenerateOrder(
+    [FromQuery] int restaurantId,           // required
+    [FromQuery] int? tableNo = null,   // optional (null-able, default=null)
+    [FromQuery] string source = "QR",   // optional (default="QR")
+    [FromBody] Order? orderData = null    // optional (default=null -- lets caller omit body)
+)
+
     {
-        if (tableNo.HasValue)
-            orderData.RestaurantTableID = tableNo.Value;
 
-        try
+        if (restaurantId <= 0)
+            return BadRequest("restaurantId is required");
+
+        if (!await _context.Restaurants.AnyAsync(r => r.RestaurantID == restaurantId))
+            return BadRequest("Unknown restaurantId");
+
+
+        if (orderData == null) orderData = new Order();     // null-safe
+
+        if (orderData.UserID <= 0)                          // anonymous walk-in
         {
-            if (orderData == null)
-                orderData = new Order();
-
-            if (orderData.UserID <= 0)
+            var anon = new User
             {
-                var newCustomer = new User
-                {
-                    UserRole = "customer",
-                    UserName = "Anonymous",
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow,
-                    CreatedBy = "System",
-                    UpdatedBy = "System",
-                    IsAvailable = true,
-                    RestaurantID = restaurantId // ✅ ADD THIS LINE
-
-                };
-
-                // Add validation
-                if (restaurantId <= 0 || !await _context.Restaurants.AnyAsync(r => r.RestaurantID == restaurantId))
-                {
-                    return BadRequest("Invalid restaurant ID");
-                }
-
-                _context.Users.Add(newCustomer);
-                await _context.SaveChangesAsync();
-                orderData.UserID = newCustomer.UserID;
-            }
-
-            // ✅ Validate table belongs to restaurant
-            var table = await _context.RestaurantTables
-                .FirstOrDefaultAsync(t => t.RestaurantTableID == orderData.RestaurantTableID);
-            if (table == null || table.RestaurantID != restaurantId)
-                return BadRequest("Invalid or mismatched table for this restaurant.");
-
-            var newOrder = new Order
-            {
-                UserID = orderData.UserID,
-                RestaurantTableID = orderData.RestaurantTableID,
+                UserRole = "customer",
+                UserName = "Guest",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
-                CreatedBy = orderData.UserID.ToString(),
-                UpdatedBy = orderData.UserID.ToString(),
-                OrderStatus = OrderStatus.Pending,
-                KitchenStatus = KitchenStatus.Pending,
-                OrderItems = orderData.OrderItems ?? new List<OrderItem>(),
-                RestaurantID = restaurantId, // ✅ added
-                IsAssigned = false
+                CreatedBy = "System",
+                UpdatedBy = "System",
+                IsAvailable = true,
+                RestaurantID = restaurantId
             };
 
-            int? waiterId = await _orderRepository.GetNextAvailableWaiterAsync(restaurantId);
-            if (waiterId.HasValue)
-            {
-                newOrder.WaiterUserID = waiterId.Value;
-                newOrder.IsAssigned = true;
-            }
+            _context.Users.Add(anon);
+            await _context.SaveChangesAsync();
 
-            var createdOrder = await _orderRepository.AddOrderAsync(newOrder);
-
-            return Ok(new
-            {
-                message = "Order generated with automatic waiter assignment!",
-                orderID = createdOrder.OrderID,
-                orderItems = createdOrder.OrderItems
-            });
+            orderData.UserID = anon.UserID;
         }
-        catch (Exception ex)
+
+
+        if (tableNo.HasValue)
         {
-            _logger.LogError($"Error generating order: {ex.Message}\n{ex.StackTrace}");
-            return StatusCode(500, "An error occurred while generating the order.");
+            var table = await _context.RestaurantTables
+                        .FirstOrDefaultAsync(t => t.RestaurantTableID == tableNo
+                                               && t.RestaurantID == restaurantId);
+            if (table == null)
+                return BadRequest("Table does not belong to this restaurant");
+
+            orderData.RestaurantTableID = table.RestaurantTableID;
         }
+
+        var order = new Order
+        {
+            UserID = orderData.UserID,
+            RestaurantID = restaurantId,
+            RestaurantTableID = orderData.RestaurantTableID,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            CreatedBy = orderData.UserID.ToString(),
+            UpdatedBy = orderData.UserID.ToString(),
+            OrderStatus = OrderStatus.Pending,
+            KitchenStatus = KitchenStatus.Pending,
+            Source = source.Equals("waiter", StringComparison.OrdinalIgnoreCase)
+                                    ? OrderSource.Waiter         // ✨ NEW
+                                    : OrderSource.QR,
+            OrderItems = new List<OrderItem>()            // empty for now
+        };
+
+
+        if (orderData.OrderItems != null && orderData.OrderItems.Any())
+        {
+            foreach (var inc in orderData.OrderItems)
+            {
+                order.OrderItems.Add(new OrderItem
+                {
+                    ProductID = inc.ProductID,
+                    Quantity = inc.Quantity,
+                    UnitPrice = inc.UnitPrice,
+                    BatchID = 1,
+                    RestaurantID = restaurantId,
+                    IsPrepared = false,
+                    AddedToKitchenAt = DateTime.UtcNow,
+                 
+
+                    Customizations = (inc.CustomizationOptionIds ?? new List<int>())
+                                     .Select(id => new OrderItemCustomization
+                                     {
+                                         CustomizationOptionID = id
+                                     }).ToList()
+                });
+            }
+            _orderRepository.CalculateOrderAmounts(order);
+        }
+
+
+        int? waiterId = await _orderRepository.GetNextAvailableWaiterAsync(restaurantId);
+        if (waiterId.HasValue)
+        {
+            order.WaiterUserID = waiterId.Value;
+            order.IsAssigned = true;
+        }
+
+        var created = await _orderRepository.AddOrderAsync(order);
+
+        return Ok(new
+        {
+            message = "Order created successfully",
+            orderID = created.OrderID,
+            source = created.Source.ToString(),        // “QR” or “Waiter” – handy for UI
+            waiterID = created.WaiterUserID,             // may be null
+            orderItems = created.OrderItems.Select(i => new
+            {
+                i.ProductID,
+                i.Quantity,
+                i.UnitPrice
+            })
+        });
     }
 
 
@@ -126,6 +161,9 @@ public class OrderController : ControllerBase
     {
         try
         {
+            // 🔍 Log entire payload for debug
+            _logger.LogInformation("📦 Incoming OrderItems JSON: " + System.Text.Json.JsonSerializer.Serialize(orderItems));
+
             var existingOrder = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
             if (existingOrder == null)
                 return NotFound(new { message = "Order not found." });
@@ -156,6 +194,8 @@ public class OrderController : ControllerBase
 
                 foreach (var incoming in orderItems)
                 {
+                    _logger.LogInformation($"➤ NEW ORDER ITEM — ProductID: {incoming.ProductID}, Qty: {incoming.Quantity}");
+
                     var product = await _productRepository.GetProductByIdAsync(incoming.ProductID);
                     if (product == null)
                         return NotFound(new { message = $"Product with ID {incoming.ProductID} not found." });
@@ -171,7 +211,8 @@ public class OrderController : ControllerBase
                         IsPrepared = false,
                         AddedToKitchenAt = DateTime.UtcNow,
                         BatchID = 1,
-                        RestaurantID = restaurantId, // ✅ FIXED
+                        RestaurantID = restaurantId,
+                       
                         Customizations = new List<OrderItemCustomization>()
                     };
 
@@ -200,6 +241,7 @@ public class OrderController : ControllerBase
                     {
                         productID = item.ProductID,
                         quantity = item.Quantity
+                        
                     })
                 });
             }
@@ -215,6 +257,8 @@ public class OrderController : ControllerBase
 
             foreach (var incoming in orderItems)
             {
+                _logger.LogInformation($"➤ EXISTING ORDER ITEM — ProductID: {incoming.ProductID}, Qty: {incoming.Quantity}");
+
                 var product = await _productRepository.GetProductByIdAsync(incoming.ProductID);
                 if (product == null)
                     return NotFound(new { message = $"Product with ID {incoming.ProductID} not found." });
@@ -230,7 +274,7 @@ public class OrderController : ControllerBase
                     IsPrepared = false,
                     AddedToKitchenAt = DateTime.UtcNow,
                     BatchID = newBatchId,
-                    RestaurantID = restaurantId, // ✅ FIXED
+                    RestaurantID = restaurantId,
                     Customizations = new List<OrderItemCustomization>()
                 };
 
@@ -261,6 +305,7 @@ public class OrderController : ControllerBase
                 {
                     productID = item.ProductID,
                     quantity = item.Quantity
+             
                 })
             });
         }
@@ -381,12 +426,14 @@ public class OrderController : ControllerBase
                 orderStatus = order.OrderStatus.ToString(),
                 createdAt = order.CreatedAt,
                 orderItems = order.OrderItems.Select(item => new
+
                 {
                     productID = item.ProductID,
                     productName = item.Product?.ProductName,
                     quantity = item.Quantity,
                     unitPrice = item.UnitPrice,
                     lineTotal = item.UnitPrice * item.Quantity,
+
                     customizations = item.Customizations.Select(c => new
                     {
                         c.CustomizationOptionID,
@@ -522,6 +569,8 @@ public class OrderController : ControllerBase
                         name = oi.Product.ProductName,
                         quantity = oi.Quantity,
                         isPrepared = oi.IsPrepared,
+                       
+                        
                         customizations = oi.Customizations.Select(c => new
                         {
                             customizationOptionID = c.CustomizationOptionID,
@@ -560,7 +609,7 @@ public class OrderController : ControllerBase
                 ProductID = oi.ProductID,
                 Name = oi.Product.ProductName,
                 oi.Quantity,
-                Customizations = oi.Customizations.Select(c => new {
+                                Customizations = oi.Customizations.Select(c => new {
                     c.CustomizationOptionID,
                     OptionName = c.CustomizationOption.Name
                 }).ToList()
@@ -1210,7 +1259,8 @@ public class OrderController : ControllerBase
             PaymentStatus = PaymentStatus.Pending,
             CreatedAt = DateTime.UtcNow,
             IsNotified = false,
-            Amount = order.TotalAmount
+            Amount = order.TotalAmount,
+            RestaurantID = restaurantId
         };
 
         _context.Payments.Add(payment);
@@ -2261,7 +2311,9 @@ public class OrderController : ControllerBase
                     productID = item.ProductID,
                     productName = item.Product?.ProductName ?? $"Product {item.ProductID}",
                     quantity = item.Quantity,
-                    unitPrice = item.UnitPrice     // Add unit price
+                    unitPrice = item.UnitPrice ,    // Add unit price
+
+
                 }),
                 latestPayment = order.Payments.FirstOrDefault() == null ? null : new
                 {
