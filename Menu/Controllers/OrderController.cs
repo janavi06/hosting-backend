@@ -1392,7 +1392,9 @@ public class OrderController : ControllerBase
                     upiName = restaurant?.UPI_Name ?? restaurant?.Name,
                     amount = order.TotalAmount,
                     transactionId,
-                    orderId
+                    orderId,
+                    paymentId = payment.PaymentID
+
                 });
             }
 
