@@ -50,31 +50,39 @@ var envUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
 
 if (!string.IsNullOrWhiteSpace(envUrl))
 {
-    if (envUrl.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase))
-        envUrl = envUrl.Replace("tcp://", "postgresql://", StringComparison.OrdinalIgnoreCase);
-
-    var dbUri = new Uri(envUrl);
-    var userInfo = (dbUri.UserInfo ?? "").Split(':', 2, StringSplitOptions.None);
-    var username = userInfo.Length > 0 ? userInfo[0] : "";
-    var password = userInfo.Length > 1 ? userInfo[1] : "";
-    var port = dbUri.Port > 0 ? dbUri.Port : 5432;
-
-    var csb = new NpgsqlConnectionStringBuilder
+    if (envUrl.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+        envUrl.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
     {
-        Host = dbUri.Host,
-        Port = port,
-        Database = dbUri.AbsolutePath.TrimStart('/'),
-        Username = username,
-        Password = password,
-        SslMode = SslMode.Require,
-        TrustServerCertificate = true,
-        Pooling = true
-    };
+        // Render-style URL: postgres://user:pass@host:port/db
+        var dbUri = new Uri(envUrl);
+        var userInfo = (dbUri.UserInfo ?? "").Split(':', 2, StringSplitOptions.None);
+        var username = userInfo.Length > 0 ? userInfo[0] : "";
+        var password = userInfo.Length > 1 ? userInfo[1] : "";
+        var port = dbUri.Port > 0 ? dbUri.Port : 5432;
 
-    conn = csb.ConnectionString;
+        var csb = new NpgsqlConnectionStringBuilder
+        {
+            Host = dbUri.Host,
+            Port = port,
+            Database = dbUri.AbsolutePath.TrimStart('/'),
+            Username = username,
+            Password = password,
+            SslMode = SslMode.Require,
+            TrustServerCertificate = true,
+            Pooling = true
+        };
+
+        conn = csb.ConnectionString;
+    }
+    else
+    {
+        // Already a connection string (Host=...;User Id=...; etc.)
+        conn = envUrl;
+    }
 }
 else
 {
+    // Fallback to appsettings.json
     conn = builder.Configuration.GetConnectionString("DefaultConnection");
 }
 
@@ -196,6 +204,10 @@ static string MaskPasswordFromConnectionString(string cs)
     }
     catch
     {
-        return System.Text.RegularExpressions.Regex.Replace(cs, "(Password|Pwd)=[^;]+", "$1=*****", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return System.Text.RegularExpressions.Regex.Replace(
+            cs,
+            "(Password|Pwd)=[^;]+",
+            "$1=*****",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 }
