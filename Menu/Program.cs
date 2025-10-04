@@ -27,6 +27,7 @@ builder.Services.AddScoped<ChatbotService>();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(
         "http://localhost:4200",
+        "https://deploying-frontend-three.vercel.app",
         "https://scanui.netlify.app")
     .AllowAnyHeader()
     .AllowAnyMethod()
