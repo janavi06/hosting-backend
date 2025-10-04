@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Restaurant_Menu.Models;
+using Restaurant_System.Models;
 
 public class ApplicationDbContext : DbContext
 {
@@ -21,6 +22,29 @@ public class ApplicationDbContext : DbContext
     public DbSet<KitchenNotification> KitchenNotifications { get; set; }
     public DbSet<WaiterNotification> WaiterNotifications { get; set; }
     public DbSet<Offer> Offers { get; set; }
+
+    // NEW: Staff Management DbSets
+    public DbSet<Staff> Staff { get; set; }
+    public DbSet<StaffShift> StaffShifts { get; set; }
+    public DbSet<StaffPerformance> StaffPerformances { get; set; }
+
+    // NEW: Table Management DbSets
+    public DbSet<TableManagement> TableManagement { get; set; }
+    public DbSet<Reservation> Reservations { get; set; }
+
+    // NEW: Expense Tracking DbSets
+    public DbSet<Expense> Expenses { get; set; }
+    public DbSet<Budget> Budgets { get; set; }
+
+    // NEW: Customer Relationship DbSets
+    public DbSet<Customer> Customers { get; set; }
+    public DbSet<CustomerFeedback> CustomerFeedbacks { get; set; }
+    public DbSet<LoyaltyProgram> LoyaltyPrograms { get; set; }
+
+    // NEW: Advanced Analytics DbSets
+    public DbSet<AnalyticsSnapshot> AnalyticsSnapshots { get; set; }
+    public DbSet<PredictiveData> PredictiveData { get; set; }
+    public DbSet<CompetitiveAnalysis> CompetitiveAnalyses { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -70,8 +94,348 @@ public class ApplicationDbContext : DbContext
                   .OnDelete(DeleteBehavior.Restrict);
         });
 
-        // CATEGORIES
-        modelBuilder.Entity<Category>(entity =>
+        // NEW: STAFF
+        modelBuilder.Entity<Staff>(entity =>
+        {
+            entity.ToTable("staff");
+            entity.HasKey(e => e.StaffID);
+            entity.Property(e => e.StaffID).HasColumnName("staffid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.Name).HasColumnName("name").IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Role).HasColumnName("role").IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Phone).HasColumnName("phone").HasMaxLength(20);
+            entity.Property(e => e.Email).HasColumnName("email").HasMaxLength(255);
+            entity.Property(e => e.HourlyRate).HasColumnName("hourlyrate").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.IsActive).HasColumnName("isactive").HasDefaultValue(true);
+            entity.Property(e => e.HireDate).HasColumnName("hiredate").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: STAFF SHIFTS
+        modelBuilder.Entity<StaffShift>(entity =>
+        {
+            entity.ToTable("staffshifts");
+            entity.HasKey(e => e.ShiftID);
+            entity.Property(e => e.ShiftID).HasColumnName("shiftid");
+            entity.Property(e => e.StaffID).HasColumnName("staffid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.ShiftDate).HasColumnName("shiftdate").HasColumnType("date");
+            entity.Property(e => e.StartTime).HasColumnName("starttime");
+            entity.Property(e => e.EndTime).HasColumnName("endtime");
+            entity.Property(e => e.Role).HasColumnName("role").HasMaxLength(50);
+            entity.Property(e => e.HoursWorked).HasColumnName("hoursworked").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.IsCompleted).HasColumnName("iscompleted").HasDefaultValue(false);
+            entity.Property(e => e.Notes).HasColumnName("notes");
+
+            entity.HasOne(e => e.Staff)
+                  .WithMany(s => s.Shifts)
+                  .HasForeignKey(e => e.StaffID)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: STAFF PERFORMANCE
+        modelBuilder.Entity<StaffPerformance>(entity =>
+        {
+            entity.ToTable("staffperformances");
+            entity.HasKey(e => e.PerformanceID);
+            entity.Property(e => e.PerformanceID).HasColumnName("performanceid");
+            entity.Property(e => e.StaffID).HasColumnName("staffid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.PerformanceDate).HasColumnName("performancedate").HasColumnType("date");
+            entity.Property(e => e.OrdersServed).HasColumnName("ordersserved");
+            entity.Property(e => e.TotalSales).HasColumnName("totalsales").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.AverageOrderValue).HasColumnName("averageordervalue").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.PositiveReviews).HasColumnName("positivereviews");
+            entity.Property(e => e.NegativeReviews).HasColumnName("negativereviews");
+            entity.Property(e => e.EfficiencyScore).HasColumnName("efficiencyscore").HasColumnType("decimal(5,2)");
+
+            entity.HasOne(e => e.Staff)
+                  .WithMany(s => s.Performances)
+                  .HasForeignKey(e => e.StaffID)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: TABLE MANAGEMENT
+        modelBuilder.Entity<TableManagement>(entity =>
+        {
+            entity.ToTable("tablemanagement");
+            entity.HasKey(e => e.TableManagementID);
+            entity.Property(e => e.TableManagementID).HasColumnName("tablemanagementid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.RestaurantTableID).HasColumnName("restauranttableid");
+            entity.Property(e => e.Status).HasColumnName("status").HasConversion<string>();
+            entity.Property(e => e.Section).HasColumnName("section").HasConversion<string>();
+            entity.Property(e => e.CurrentOrderID).HasColumnName("currentorderid");
+            entity.Property(e => e.ReservedByCustomerID).HasColumnName("reservedbycustomerid");
+            entity.Property(e => e.ReservationTime).HasColumnName("reservationtime").HasColumnType("timestamptz");
+            entity.Property(e => e.OccupiedSince).HasColumnName("occupiedsince").HasColumnType("timestamptz");
+            entity.Property(e => e.SeatingCapacity).HasColumnName("seatingcapacity");
+            entity.Property(e => e.SpecialFeatures).HasColumnName("specialfeatures");
+            entity.Property(e => e.XPosition).HasColumnName("xposition");
+            entity.Property(e => e.YPosition).HasColumnName("yposition");
+            entity.Property(e => e.LastUpdated).HasColumnName("lastupdated").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.RestaurantTable)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantTableID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.CurrentOrder)
+                  .WithMany()
+                  .HasForeignKey(e => e.CurrentOrderID)
+                  .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // NEW: RESERVATIONS
+        modelBuilder.Entity<Reservation>(entity =>
+        {
+            entity.ToTable("reservations");
+            entity.HasKey(e => e.ReservationID);
+            entity.Property(e => e.ReservationID).HasColumnName("reservationid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.RestaurantTableID).HasColumnName("restauranttableid");
+            entity.Property(e => e.CustomerName).HasColumnName("customername").IsRequired().HasMaxLength(100);
+            entity.Property(e => e.CustomerPhone).HasColumnName("customerphone");
+            entity.Property(e => e.CustomerEmail).HasColumnName("customeremail").HasMaxLength(255);
+            entity.Property(e => e.ReservationTime).HasColumnName("reservationtime").HasColumnType("timestamptz");
+            entity.Property(e => e.PartySize).HasColumnName("partysize");
+            entity.Property(e => e.SpecialRequests).HasColumnName("specialrequests");
+            entity.Property(e => e.Status).HasColumnName("status").HasDefaultValue("Confirmed");
+            entity.Property(e => e.CreatedAt).HasColumnName("createdat").HasColumnType("timestamptz");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updatedat").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.RestaurantTable)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantTableID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: EXPENSES
+        modelBuilder.Entity<Expense>(entity =>
+        {
+            entity.ToTable("expenses");
+            entity.HasKey(e => e.ExpenseID);
+            entity.Property(e => e.ExpenseID).HasColumnName("expenseid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.Category).HasColumnName("category").HasConversion<string>();
+            entity.Property(e => e.Description).HasColumnName("description").IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Amount).HasColumnName("amount").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.ExpenseDate).HasColumnName("expensedate").HasColumnType("date");
+            entity.Property(e => e.PaymentMethod).HasColumnName("paymentmethod").HasConversion<string>();
+            entity.Property(e => e.Vendor).HasColumnName("vendor").HasMaxLength(50);
+            entity.Property(e => e.ReceiptNumber).HasColumnName("receiptnumber").HasMaxLength(100);
+            entity.Property(e => e.Notes).HasColumnName("notes");
+            entity.Property(e => e.IsRecurring).HasColumnName("isrecurring").HasDefaultValue(false);
+            entity.Property(e => e.RecurringFrequency).HasColumnName("recurringfrequency");
+            entity.Property(e => e.ApprovedBy).HasColumnName("approvedby");
+            entity.Property(e => e.CreatedAt).HasColumnName("createdat").HasColumnType("timestamptz");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updatedat").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: BUDGETS
+        modelBuilder.Entity<Budget>(entity =>
+        {
+            entity.ToTable("budgets");
+            entity.HasKey(e => e.BudgetID);
+            entity.Property(e => e.BudgetID).HasColumnName("budgetid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.Category).HasColumnName("category").HasConversion<string>();
+            entity.Property(e => e.MonthlyBudget).HasColumnName("monthlybudget").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.Year).HasColumnName("year");
+            entity.Property(e => e.Month).HasColumnName("month");
+            entity.Property(e => e.ActualSpent).HasColumnName("actualspent").HasColumnType("decimal(10,2)");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: CUSTOMERS
+        modelBuilder.Entity<Customer>(entity =>
+        {
+            entity.ToTable("customers");
+            entity.HasKey(e => e.CustomerID);
+            entity.Property(e => e.CustomerID).HasColumnName("customerid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.Name).HasColumnName("name").IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Phone).HasColumnName("phone");
+            entity.Property(e => e.Email).HasColumnName("email").HasMaxLength(255);
+            entity.Property(e => e.DateOfBirth).HasColumnName("dateofbirth").HasColumnType("date");
+            entity.Property(e => e.TotalVisits).HasColumnName("totalvisits");
+            entity.Property(e => e.TotalSpent).HasColumnName("totalspent").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.FirstVisit).HasColumnName("firstvisit").HasColumnType("timestamptz");
+            entity.Property(e => e.LastVisit).HasColumnName("lastvisit").HasColumnType("timestamptz");
+            entity.Property(e => e.Preferences).HasColumnName("preferences");
+            entity.Property(e => e.Allergies).HasColumnName("allergies");
+            entity.Property(e => e.IsVIP).HasColumnName("isvip").HasDefaultValue(false);
+            entity.Property(e => e.LoyaltyPoints).HasColumnName("loyaltypoints");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: CUSTOMER FEEDBACK
+        modelBuilder.Entity<CustomerFeedback>(entity =>
+        {
+            entity.ToTable("customerfeedbacks");
+            entity.HasKey(e => e.FeedbackID);
+            entity.Property(e => e.FeedbackID).HasColumnName("feedbackid");
+            entity.Property(e => e.CustomerID).HasColumnName("customerid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.OrderID).HasColumnName("orderid");
+            entity.Property(e => e.Rating).HasColumnName("rating");
+            entity.Property(e => e.Comments).HasColumnName("comments");
+            entity.Property(e => e.Category).HasColumnName("category");
+            entity.Property(e => e.IsResolved).HasColumnName("isresolved").HasDefaultValue(false);
+            entity.Property(e => e.ResolutionNotes).HasColumnName("resolutionnotes");
+            entity.Property(e => e.CreatedAt).HasColumnName("createdat").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.Customer)
+                  .WithMany(c => c.Feedbacks)
+                  .HasForeignKey(e => e.CustomerID)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Order)
+                  .WithMany()
+                  .HasForeignKey(e => e.OrderID)
+                  .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // NEW: LOYALTY PROGRAMS
+        modelBuilder.Entity<LoyaltyProgram>(entity =>
+        {
+            entity.ToTable("loyaltyprograms");
+            entity.HasKey(e => e.LoyaltyID);
+            entity.Property(e => e.LoyaltyID).HasColumnName("loyaltyid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.ProgramName).HasColumnName("programname").IsRequired().HasMaxLength(100);
+            entity.Property(e => e.PointsPerDollar).HasColumnName("pointsperdollar").HasColumnType("decimal(5,2)").HasDefaultValue(1);
+            entity.Property(e => e.DiscountPerPoint).HasColumnName("discountperpoint").HasColumnType("decimal(5,4)").HasDefaultValue(0.01m);
+            entity.Property(e => e.PointsForFreeItem).HasColumnName("pointsforfreeitem").HasDefaultValue(100);
+            entity.Property(e => e.IsActive).HasColumnName("isactive").HasDefaultValue(true);
+            entity.Property(e => e.CreatedAt).HasColumnName("createdat").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: ANALYTICS SNAPSHOTS
+        modelBuilder.Entity<AnalyticsSnapshot>(entity =>
+        {
+            entity.ToTable("analyticssnapshots");
+            entity.HasKey(e => e.SnapshotID);
+            entity.Property(e => e.SnapshotID).HasColumnName("snapshotid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.SnapshotDate).HasColumnName("snapshotdate").HasColumnType("date");
+            entity.Property(e => e.DailyRevenue).HasColumnName("dailyrevenue").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.DailyOrders).HasColumnName("dailyorders");
+            entity.Property(e => e.AverageOrderValue).HasColumnName("averageordervalue").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.CancelledOrders).HasColumnName("cancelledorders");
+            entity.Property(e => e.NewCustomers).HasColumnName("newcustomers");
+            entity.Property(e => e.ReturningCustomers).HasColumnName("returningcustomers");
+            entity.Property(e => e.CustomerSatisfactionScore).HasColumnName("customersatisfactionscore").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.LaborCostPercentage).HasColumnName("laborcostpercentage").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.FoodCostPercentage).HasColumnName("foodcostpercentage").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.TableTurnoverRate).HasColumnName("tableturnoverrate").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.LowStockItems).HasColumnName("lowstockitems");
+            entity.Property(e => e.InventoryValue).HasColumnName("inventoryvalue").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.WeatherCondition).HasColumnName("weathercondition");
+            entity.Property(e => e.Temperature).HasColumnName("temperature").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.WeatherImpactScore).HasColumnName("weatherimpactscore").HasColumnType("decimal(5,2)");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: PREDICTIVE DATA
+        modelBuilder.Entity<PredictiveData>(entity =>
+        {
+            entity.ToTable("predictivedata");
+            entity.HasKey(e => e.PredictionID);
+            entity.Property(e => e.PredictionID).HasColumnName("predictionid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.PredictionDate).HasColumnName("predictiondate").HasColumnType("date");
+            entity.Property(e => e.PredictedRevenue).HasColumnName("predictedrevenue").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.PredictedOrders).HasColumnName("predictedorders");
+            entity.Property(e => e.PredictedCustomers).HasColumnName("predictedcustomers");
+            entity.Property(e => e.PeakHours).HasColumnName("peakhours");
+            entity.Property(e => e.RecommendedStaffing).HasColumnName("recommendedstaffing");
+            entity.Property(e => e.ConfidenceLevel).HasColumnName("confidencelevel").HasColumnType("decimal(5,4)");
+            entity.Property(e => e.GeneratedAt).HasColumnName("generatedat").HasColumnType("timestamptz");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // NEW: COMPETITIVE ANALYSIS
+        modelBuilder.Entity<CompetitiveAnalysis>(entity =>
+        {
+            entity.ToTable("competitiveanalyses");
+            entity.HasKey(e => e.AnalysisID);
+            entity.Property(e => e.AnalysisID).HasColumnName("analysisid");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.AnalysisDate).HasColumnName("analysisdate").HasColumnType("date");
+            entity.Property(e => e.CompetitorName).HasColumnName("competitorname");
+            entity.Property(e => e.CompetitorAvgPrice).HasColumnName("competitoravgprice").HasColumnType("decimal(10,2)");
+            entity.Property(e => e.CompetitorRating).HasColumnName("competitorrating").HasColumnType("decimal(3,2)");
+            entity.Property(e => e.CompetitorStrengths).HasColumnName("competitorstrengths");
+            entity.Property(e => e.CompetitorWeaknesses).HasColumnName("competitorweaknesses");
+            entity.Property(e => e.MarketShare).HasColumnName("marketshare").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.PriceCompetitiveness).HasColumnName("pricecompetitiveness").HasColumnType("decimal(5,2)");
+            entity.Property(e => e.Recommendations).HasColumnName("recommendations");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+        });
+    
+
+// CATEGORIES
+modelBuilder.Entity<Category>(entity =>
         {
             entity.ToTable("categories");
             entity.HasKey(e => e.CategoryID);
@@ -164,6 +528,9 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.AppliedOfferID).HasColumnName("appliedofferid");
             entity.Property(e => e.DiscountAmount).HasColumnName("discountamount");
 
+            entity.Property(e => e.CustomerID)
+          .HasColumnName("customerid")
+          .IsRequired(false);  
 
             entity.HasOne(e => e.AppliedOffer)
       .WithMany() // Optional: Or .WithMany(o => o.Orders) if added in Offer.cs

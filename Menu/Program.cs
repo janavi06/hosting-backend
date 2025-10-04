@@ -1,19 +1,27 @@
-﻿// Program.cs  –  run cleanly on *any* local machine and Render
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Npgsql;
 using QuestPDF.Infrastructure;
 using Restaurant_Menu.Hubs;
 using Restaurant_Menu.Implementation;
 using Restaurant_Menu.Interface;
 using Restaurant_Menu.Repositories;
+using Restaurant_Menu.Services;
 using System.Text;
 using System.Text.Json.Serialization;
 
 QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
+
+/*──────────────────────── 0. SERVICES ──────────────────────*/
+// HttpClient factory for OpenAI
+builder.Services.AddHttpClient();
+
+// Chatbot Service
+builder.Services.AddScoped<ChatbotService>();
 
 /*──────────────────────── 1. CORS ────────────────────────*/
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
@@ -36,9 +44,45 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-/*──────────────────────── 5. Database ────────────────────*/
-var conn = builder.Configuration.GetConnectionString("DefaultConnection");
-builder.Services.AddDbContext<ApplicationDbContext>(opt => opt.UseNpgsql(conn));
+/*──────────────────────── 5. Database (Local + Render) ───*/
+string conn;
+var envUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
+
+if (!string.IsNullOrWhiteSpace(envUrl))
+{
+    if (envUrl.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase))
+        envUrl = envUrl.Replace("tcp://", "postgresql://", StringComparison.OrdinalIgnoreCase);
+
+    var dbUri = new Uri(envUrl);
+    var userInfo = (dbUri.UserInfo ?? "").Split(':', 2, StringSplitOptions.None);
+    var username = userInfo.Length > 0 ? userInfo[0] : "";
+    var password = userInfo.Length > 1 ? userInfo[1] : "";
+    var port = dbUri.Port > 0 ? dbUri.Port : 5432;
+
+    var csb = new NpgsqlConnectionStringBuilder
+    {
+        Host = dbUri.Host,
+        Port = port,
+        Database = dbUri.AbsolutePath.TrimStart('/'),
+        Username = username,
+        Password = password,
+        SslMode = SslMode.Require,
+        TrustServerCertificate = true,
+        Pooling = true
+    };
+
+    conn = csb.ConnectionString;
+}
+else
+{
+    conn = builder.Configuration.GetConnectionString("DefaultConnection");
+}
+
+var safeConn = MaskPasswordFromConnectionString(conn);
+Console.WriteLine($"Using DB connection: {safeConn}");
+
+builder.Services.AddDbContext<ApplicationDbContext>(opt =>
+    opt.UseNpgsql(conn));
 
 /*──────────────────────── 6. DI (Repositories) ───────────*/
 builder.Services.AddScoped<IOrderItemRepository, OrderItemRepository>();
@@ -68,7 +112,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
         };
 
-        /* SignalR query‑string token */
         opt.Events = new JwtBearerEvents
         {
             OnMessageReceived = ctx =>
@@ -85,12 +128,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 /*──────────────────────── 8. Host URLs ──────────────────*/
-var portEnv = Environment.GetEnvironmentVariable("PORT");          // e.g. Render
-var urlsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_URLS"); // VS / dotnet run
+var portEnv = Environment.GetEnvironmentVariable("PORT");
+var urlsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
 
 if (string.IsNullOrWhiteSpace(urlsEnv) && string.IsNullOrWhiteSpace(portEnv))
 {
-    // fallback for plain `dotnet run`
     builder.WebHost.UseUrls("http://localhost:5088", "https://localhost:5001");
 }
 else if (!string.IsNullOrWhiteSpace(portEnv))
@@ -105,7 +147,7 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Restaurant‑Menu API v1"));
+    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Restaurant-Menu API v1"));
 }
 
 /* Global JSON error response */
@@ -116,13 +158,12 @@ app.Map("/error", a => a.Run(async ctx =>
     await ctx.Response.WriteAsJsonAsync(new { error = ex?.Message });
 }));
 
-/*──────────────────────── FIX FOR RENDER ──────────────────────*/
-// Removed app.UseHttpsRedirection(); (causes deployment timeout on Render)
+/* Fix Render deployment */
 if (!app.Environment.IsDevelopment())
 {
     app.Use(async (context, next) =>
     {
-        context.Request.Scheme = "https"; // force HTTPS scheme when hosted behind Render proxy
+        context.Request.Scheme = "https";
         await next();
     });
 }
@@ -137,9 +178,24 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<OrderHub>("/hubs/order");
 
-/* ✅ Render Health Check Route */
+/* Health check */
 app.MapGet("/", () => "✅ ScanUI backend is running!");
-
 app.MapFallbackToFile("index.html");
 
 app.Run();
+
+/* ----------------- Helper ----------------- */
+static string MaskPasswordFromConnectionString(string cs)
+{
+    try
+    {
+        var builder = new NpgsqlConnectionStringBuilder(cs);
+        if (!string.IsNullOrEmpty(builder.Password))
+            builder.Password = "*****";
+        return builder.ConnectionString;
+    }
+    catch
+    {
+        return System.Text.RegularExpressions.Regex.Replace(cs, "(Password|Pwd)=[^;]+", "$1=*****", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+}

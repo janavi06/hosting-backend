@@ -896,6 +896,8 @@ public class OrderController : ControllerBase
         }
     }
 
+ 
+
     [HttpPut("waiter-requests/{id}/accept")]
     public async Task<IActionResult> AcceptWaiterRequest(int id)
     {
@@ -903,6 +905,7 @@ public class OrderController : ControllerBase
         if (request == null)
             return NotFound(new { message = "Request not found." });
 
+        // Assuming accept means delete/resolve
         _context.WaiterRequests.Remove(request);
         await _context.SaveChangesAsync();
 
@@ -975,17 +978,16 @@ public class OrderController : ControllerBase
     }
 
 
-
     [HttpGet("waiter-requests")]
-    public IActionResult GetWaiterRequests()
+    public async Task<IActionResult> GetWaiterRequests([FromQuery] int restaurantId)
     {
-        var requests = _context.WaiterRequests
+        var requests = await _context.WaiterRequests
+            .Where(r => r.RestaurantID == restaurantId) // <-- Add Filter
             .OrderByDescending(r => r.RequestTime)
-            .ToList();
+            .ToListAsync();
 
         return Ok(new { data = requests });
     }
-
 
     [HttpPost("uploadImage")]
     [Consumes("multipart/form-data")]
@@ -2273,7 +2275,145 @@ public class OrderController : ControllerBase
         return Content(html, "text/html");
     }
 
+    // Inside OrderController.cs
 
+    [HttpGet("dashboard/active-orders")]
+    public async Task<IActionResult> GetActiveOrders([FromQuery] int restaurantId)
+    {
+        try
+        {
+            var activeOrders = await _context.Orders
+                .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+                .Include(o => o.Payments.OrderByDescending(p => p.CreatedAt))
+                .Include(o => o.Waiter) // Include waiter info
+                .Where(o => o.RestaurantID == restaurantId &&
+                            o.OrderStatus != OrderStatus.Completed &&
+                            o.OrderStatus != OrderStatus.Cancelled)
+                .OrderByDescending(o => o.CreatedAt)
+                .ToListAsync();
+
+            // Ensure calculations are run for totals
+            foreach (var order in activeOrders)
+            {
+                _orderRepository.CalculateOrderAmounts(order);
+            }
+            await _context.SaveChangesAsync();
+
+            var result = new
+            {
+                totalActiveOrders = activeOrders.Count,
+                orders = activeOrders.Select(o =>
+                {
+                    // Determine the most relevant status for the dashboard
+                    string mainStatus;
+                    if (o.Payments.Any(p => p.PaymentStatus == PaymentStatus.Pending))
+                    {
+                        mainStatus = "Pending Payment";
+                    }
+                    else if (o.KitchenStatus == KitchenStatus.Ready && o.OrderStatus != OrderStatus.Served)
+                    {
+                        mainStatus = "Awaiting Service";
+                    }
+                    else if (o.OrderStatus == OrderStatus.Confirmed || o.KitchenStatus == KitchenStatus.Preparing)
+                    {
+                        mainStatus = "In Progress";
+                    }
+                    else
+                    {
+                        mainStatus = o.OrderStatus.ToString();
+                    }
+
+                    return new
+                    {
+                        orderID = o.OrderID,
+                        tableNo = o.RestaurantTableID,
+                        status = mainStatus,
+                        items = o.OrderItems.Select(oi => new { oi.Quantity, productName = oi.Product?.ProductName }),
+                        totalAmount = o.TotalAmount,
+                        lastUpdated = o.UpdatedAt,
+                        createdAt = o.CreatedAt, // Add createdAt for oldest pending calculation
+                        waiterUserID = o.WaiterUserID,
+                        waiterName = o.Waiter?.UserName // Add waiter name
+                    };
+                })
+            };
+
+            return Ok(new
+            {
+                message = "Active orders for dashboard fetched successfully.",
+                data = result
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error fetching active orders: {ex.Message}");
+            return StatusCode(500, "An error occurred while fetching active orders.");
+        }
+    }
+
+    // Inside OrderController.cs
+
+    [HttpGet("dashboard/kitchen-backlog")]
+    public async Task<IActionResult> GetKitchenBacklog([FromQuery] int restaurantId)
+    {
+        try
+        {
+            var totalPendingItems = await _context.OrderItems
+                .Include(oi => oi.Order)
+                .Where(oi => oi.Order.RestaurantID == restaurantId &&
+                             oi.Order.OrderStatus == OrderStatus.Confirmed &&
+                             !oi.IsPrepared)
+                .SumAsync(oi => oi.Quantity);
+
+            return Ok(new
+            {
+                message = "Kitchen backlog fetched successfully.",
+                totalPendingItems
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error fetching kitchen backlog: {ex.Message}");
+            return StatusCode(500, "An error occurred while fetching kitchen backlog.");
+        }
+    }
+
+    // Inside OrderController.cs
+
+    [HttpGet("report/today-summary")]
+    public async Task<IActionResult> GetTodaySummaryReport([FromQuery] int restaurantId)
+    {
+        try
+        {
+            var todayStart = DateTime.Today.ToUniversalTime();
+            var todayEnd = todayStart.AddDays(1).AddSeconds(-1);
+
+            var orders = await _context.Orders
+                .Where(o => o.RestaurantID == restaurantId &&
+                            o.CreatedAt >= todayStart && o.CreatedAt <= todayEnd)
+                .ToListAsync();
+
+            var completedOrders = orders.Where(o => o.OrderStatus == OrderStatus.Completed).ToList();
+            var cancelledOrders = orders.Where(o => o.OrderStatus == OrderStatus.Cancelled).ToList();
+
+            var totalRevenue = completedOrders.Sum(o => o.TotalAmount);
+            var orderCount = completedOrders.Count;
+            var avgOrderValue = orderCount > 0 ? totalRevenue / orderCount : 0;
+
+            return Ok(new
+            {
+                totalOrders = orders.Count,
+                totalRevenue,
+                avgOrderValue,
+                totalCancelled = cancelledOrders.Count
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating today's summary report.");
+            return StatusCode(500, new { message = "Internal server error" });
+        }
+    }
 
 
     [HttpGet("with-waiter")]

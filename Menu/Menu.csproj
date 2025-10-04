@@ -17,18 +17,18 @@
        ────────────────────────────────-->
   <ItemGroup>
     <!-- Entity Framework Core 8 (stable) -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore"            Version="8.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.4" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.4" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design"     Version="8.0.4">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.4">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools"      Version="8.0.4">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.4">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
 
     <!-- Providers -->
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL"    Version="8.0.4" />
-    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql"         Version="8.0.1" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.4" />
+    <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="8.0.1" />
   </ItemGroup>
 
   <!-- ────────────────────────────────
@@ -36,19 +36,19 @@
        ────────────────────────────────-->
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.4" />
-    <PackageReference Include="Microsoft.AspNetCore.Cors"                    Version="2.3.0" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR"                 Version="1.2.0" />
-    <PackageReference Include="System.IdentityModel.Tokens.Jwt"              Version="8.12.1" />
-    <PackageReference Include="Swashbuckle.AspNetCore"                       Version="9.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Cors" Version="2.3.0" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.0" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.12.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.1" />
   </ItemGroup>
 
   <!-- ────────────────────────────────
        DOCUMENTS / PDF / QR‑CODES
        ────────────────────────────────-->
   <ItemGroup>
-    <PackageReference Include="QuestPDF"   Version="2025.7.0" />
-    <PackageReference Include="DinkToPdf"  Version="1.0.8"    />
-    <PackageReference Include="QRCoder"    Version="1.6.0"    />
+    <PackageReference Include="QuestPDF" Version="2025.7.0" />
+    <PackageReference Include="DinkToPdf" Version="1.0.8" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
   <!-- ────────────────────────────────

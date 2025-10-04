@@ -42,7 +42,7 @@ namespace Restaurant_Menu.Models
         public decimal ServiceCharge { get; set; }    // e.g., 5 means 5%
         public decimal Subtotal { get; set; }
         public decimal TotalAmount { get; set; }
-        public OrderSource Source { get; set; } = OrderSource.QR;   // 🌟 NEW
+       public OrderSource? Source { get; set; } = OrderSource.QR;   // 🌟 NEW
 
         public DateTime? ClosedAt { get; set; } // Nullable for orders that aren't closed
         public DateTime CreatedAt { get; set; }
@@ -81,6 +81,7 @@ namespace Restaurant_Menu.Models
         public int RestaurantID { get; set; }
         public Restaurant? Restaurant { get; set; }
 
+        public int? CustomerID { get; set; }  // Nullable, optional field
 
         // Collection for Order Items (No Navigation Properties)
         public ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
