@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
@@ -27,6 +28,7 @@ builder.Services.AddScoped<ChatbotService>();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(
         "http://localhost:4200",
+        "http://192.168.43.179:4200",
         "https://deploying-frontend-three.vercel.app",
         "https://scanui.netlify.app")
     .AllowAnyHeader()
@@ -38,8 +40,7 @@ builder.Services.AddSignalR();
 
 /*──────────────────────── 3. MVC / JSON ──────────────────*/
 builder.Services.AddControllers()
-                .AddJsonOptions(o => o.JsonSerializerOptions.ReferenceHandler =
-                                     ReferenceHandler.IgnoreCycles);
+    .AddJsonOptions(o => o.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles);
 
 /*──────────────────────── 4. Swagger ─────────────────────*/
 builder.Services.AddEndpointsApiExplorer();
@@ -140,9 +141,10 @@ builder.Services.AddAuthorization();
 var portEnv = Environment.GetEnvironmentVariable("PORT");
 var urlsEnv = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
 
+// Default to listen on all interfaces so reverse proxy/external requests work
 if (string.IsNullOrWhiteSpace(urlsEnv) && string.IsNullOrWhiteSpace(portEnv))
 {
-    builder.WebHost.UseUrls("http://localhost:5088", "https://localhost:5001");
+    builder.WebHost.UseUrls("http://0.0.0.0:5088", "https://0.0.0.0:5001");
 }
 else if (!string.IsNullOrWhiteSpace(portEnv))
 {
@@ -152,12 +154,19 @@ else if (!string.IsNullOrWhiteSpace(portEnv))
 /*──────────────────────── BUILD ──────────────────────────*/
 var app = builder.Build();
 
-/* Swagger only in dev */
-if (app.Environment.IsDevelopment())
+/* Enable forwarded headers so app understands X-Forwarded-Proto / X-Forwarded-For */
+app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Restaurant-Menu API v1"));
-}
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+});
+
+/* Swagger - enabled in all environments so /swagger is available after publish */
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Restaurant-Menu API v1");
+    c.RoutePrefix = "swagger";
+});
 
 /* Global JSON error response */
 app.UseExceptionHandler("/error");

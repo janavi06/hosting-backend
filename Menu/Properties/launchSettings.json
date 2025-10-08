@@ -42,7 +42,7 @@
     "lan-ip": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "launchBrowser": true,
+      "launchBrowser": false,
       "launchUrl": "swagger",
       "applicationUrl": "http://192.168.43.179:5000",
       "environmentVariables": {

@@ -98,7 +98,7 @@ public class OrderRepository : IOrderRepository
     }
 
 
-    // ✅ Add new order
+    // ✅ Add new order - UPDATED VERSION
     public async Task<Order> AddOrderAsync(Order order)
     {
         // Set audit and default values.
@@ -112,6 +112,18 @@ public class OrderRepository : IOrderRepository
         order.ServiceCharge = 0;
         order.OrderStatus = OrderStatus.Pending;
         order.KitchenStatus = KitchenStatus.Pending;
+
+        // ✅ CRITICAL FIX: Ensure all order items and their customizations have the correct RestaurantID
+        foreach (var item in order.OrderItems)
+        {
+            item.RestaurantID = order.RestaurantID; // Set restaurant ID for order item
+
+            // ✅ Set restaurant ID for each customization
+            foreach (var customization in item.Customizations)
+            {
+                customization.RestaurantID = order.RestaurantID;
+            }
+        }
 
         // Calculate order amounts based on order items
         CalculateOrderAmounts(order);

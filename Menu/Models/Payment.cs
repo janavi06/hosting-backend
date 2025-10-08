@@ -4,11 +4,19 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Restaurant_Menu.Models
 {
+
+    public enum PaymentChannel
+    {
+        Customer = 0,  // From menu component
+        Waiter = 1     // From waiter component
+    }
+
     public enum PaymentStatus
     {
         Pending,
         Success,
-        Failed
+        Failed,
+        Cancelled
     }
 
     public class Payment
@@ -28,6 +36,9 @@ namespace Restaurant_Menu.Models
         public Restaurant? Restaurant { get; set; }
 
         public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
+
+        public PaymentChannel PaymentChannel { get; set; } = PaymentChannel.Customer;
+
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? CompletedAt { get; set; }

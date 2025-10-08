@@ -40,6 +40,21 @@ public class OfferController : ControllerBase
         }
     }
 
+    // GET: api/offer/stats?restaurantId=5
+    [HttpGet("stats")]
+    public async Task<IActionResult> GetOfferStats([FromQuery] int restaurantId)
+    {
+        var stats = await _repo.GetOfferStatsAsync(restaurantId);
+        return Ok(stats);
+    }
+
+    // GET: api/offer/performance?restaurantId=5
+    [HttpGet("performance")]
+    public async Task<IActionResult> GetOfferPerformance([FromQuery] int restaurantId)
+    {
+        var performance = await _repo.GetOfferPerformanceAsync(restaurantId);
+        return Ok(performance);
+    }
     // 🔹 GET: api/offer/restaurant/5
     [HttpGet("restaurant/{restaurantId}")]
     public async Task<IActionResult> GetOffers(int restaurantId)

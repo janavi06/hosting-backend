@@ -46,6 +46,8 @@ public class ApplicationDbContext : DbContext
     public DbSet<PredictiveData> PredictiveData { get; set; }
     public DbSet<CompetitiveAnalysis> CompetitiveAnalyses { get; set; }
 
+    public DbSet<OrderChangeHistory> OrderChangeHistory { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // USERS
@@ -140,6 +142,50 @@ public class ApplicationDbContext : DbContext
                   .WithMany()
                   .HasForeignKey(e => e.RestaurantID)
                   .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OrderChangeHistory>(entity =>
+        {
+            entity.ToTable("OrderChangeHistory");
+
+            entity.HasKey(e => e.OrderChangeHistoryID);
+
+            entity.Property(e => e.OrderChangeHistoryID)
+                .ValueGeneratedOnAdd()
+                .UseIdentityColumn();
+
+            entity.Property(e => e.ChangeType)
+                .HasMaxLength(50)
+                .IsRequired();
+
+            entity.Property(e => e.Description)
+                .HasMaxLength(500);
+
+            entity.Property(e => e.ChangedAt)
+                .IsRequired()
+                .HasDefaultValueSql("NOW() AT TIME ZONE 'UTC'");
+
+            entity.Property(e => e.OldValues)
+                .HasColumnType("text");
+
+            entity.Property(e => e.NewValues)
+                .HasColumnType("text");
+
+            // Foreign key relationships
+            entity.HasOne(e => e.Order)
+                .WithMany()
+                .HasForeignKey(e => e.OrderID)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.ChangedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.ChangedByUserID)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(e => e.Restaurant)
+                .WithMany()
+                .HasForeignKey(e => e.RestaurantID)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // NEW: STAFF PERFORMANCE
@@ -631,6 +677,12 @@ modelBuilder.Entity<Category>(entity =>
             entity.Property(e => e.TableNo).HasColumnName("tableno");
             entity.Property(e => e.Amount).HasColumnName("amount");
             entity.Property(e => e.PaymentMethod).HasColumnName("paymentmethod");
+
+            // ✅ ADD THIS MAPPING
+            entity.Property(e => e.PaymentChannel)
+                  .HasColumnName("paymentchannel") // Use snake_case for consistency
+                  .HasConversion<int>();          // Store the enum as an integer
+
             entity.Property(e => e.PaymentStatus).HasColumnName("paymentstatus").HasConversion<string>();
             entity.Property(e => e.CreatedAt).HasColumnName("createdat").HasColumnType("timestamptz");
             entity.Property(e => e.CompletedAt).HasColumnName("completedat").HasColumnType("timestamptz");

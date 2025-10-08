@@ -33,7 +33,7 @@ namespace Restaurant_Menu.Models
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int OrderID { get; set; }
 
-        public int RestaurantTableID { get; set; }
+        public int? RestaurantTableID { get; set; }
         public int UserID { get; set; }  // Customer's UserID
 
         // New fields for tax and charges
