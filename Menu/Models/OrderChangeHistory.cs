@@ -21,6 +21,7 @@ namespace Restaurant_Menu.Models
 
         public int? ChangedByUserID { get; set; }
 
+
         [Required]
         public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
 

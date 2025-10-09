@@ -146,32 +146,27 @@ public class ApplicationDbContext : DbContext
 
         modelBuilder.Entity<OrderChangeHistory>(entity =>
         {
-            entity.ToTable("OrderChangeHistory");
+            // ✅ FIX 1: Use the exact lowercase table name
+            entity.ToTable("orderchangehistory");
 
             entity.HasKey(e => e.OrderChangeHistoryID);
 
+            // ✅ FIX 2: Map every property to its lowercase column name
             entity.Property(e => e.OrderChangeHistoryID)
+                .HasColumnName("orderchangehistoryid")
                 .ValueGeneratedOnAdd()
                 .UseIdentityColumn();
 
-            entity.Property(e => e.ChangeType)
-                .HasMaxLength(50)
-                .IsRequired();
+            entity.Property(e => e.OrderID).HasColumnName("orderid");
+            entity.Property(e => e.ChangeType).HasColumnName("changetype").HasMaxLength(50).IsRequired();
+            entity.Property(e => e.Description).HasColumnName("description").HasMaxLength(500);
+            entity.Property(e => e.ChangedByUserID).HasColumnName("changedbyuserid");
+            entity.Property(e => e.ChangedAt).HasColumnName("changedat").IsRequired();
+            entity.Property(e => e.OldValues).HasColumnName("oldvalues").HasColumnType("text");
+            entity.Property(e => e.NewValues).HasColumnName("newvalues").HasColumnType("text");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
 
-            entity.Property(e => e.Description)
-                .HasMaxLength(500);
-
-            entity.Property(e => e.ChangedAt)
-                .IsRequired()
-                .HasDefaultValueSql("NOW() AT TIME ZONE 'UTC'");
-
-            entity.Property(e => e.OldValues)
-                .HasColumnType("text");
-
-            entity.Property(e => e.NewValues)
-                .HasColumnType("text");
-
-            // Foreign key relationships
+            // Foreign key relationships (these are likely correct already)
             entity.HasOne(e => e.Order)
                 .WithMany()
                 .HasForeignKey(e => e.OrderID)
