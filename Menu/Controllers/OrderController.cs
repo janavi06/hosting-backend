@@ -2529,9 +2529,6 @@ public class OrderController : ControllerBase
             if (order == null || order.RestaurantID != restaurantId)
                 return NotFound(new { message = "Order not found for this restaurant." });
 
-            // ... existing validation code ...
-
-            // ✅ FIX: Separate the order update and history logging
             var item = order.OrderItems.FirstOrDefault(oi => oi.OrderItemID == itemId);
             if (item == null)
                 return NotFound(new { message = "Order item not found." });
@@ -2547,12 +2544,10 @@ public class OrderController : ControllerBase
                 if (newQuantity <= 0)
                 {
                     order.OrderItems.Remove(item);
-                    // Don't log here - we'll log after successful save
                 }
                 else
                 {
                     item.Quantity = newQuantity;
-                    // Don't log here - we'll log after successful save
                 }
             }
 
@@ -2582,17 +2577,26 @@ public class OrderController : ControllerBase
             _orderRepository.CalculateOrderAmounts(order);
             await _orderRepository.ApplyBestAvailableOfferAsync(order);
 
-            // ✅ STEP 1: Save order changes first
+            // ✅ FIX: Find and update any associated pending payment with the new total
+            var pendingPayment = await _context.Payments
+                .FirstOrDefaultAsync(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Pending);
+
+            if (pendingPayment != null)
+            {
+                pendingPayment.Amount = order.TotalAmount;
+            }
+
+            // Save order and payment changes
             await _context.SaveChangesAsync();
 
-            // ✅ STEP 2: Now log the change (separate operation)
+            // Log the change (separate operation)
             string changeDescription = payload.TryGetProperty("quantity", out var qtyProp2) && qtyProp2.ValueKind == JsonValueKind.Number
                 ? $"{productName} quantity changed from {oldQuantity} to {qtyProp2.GetInt32()}"
                 : $"Updated {productName}";
 
             await LogOrderChange(orderId, "ITEM_UPDATED", changeDescription, changedByUserId, restaurantId);
 
-            // ✅ STEP 3: Commit transaction
+            // Commit transaction
             await transaction.CommitAsync();
 
             // Notify kitchen (outside transaction)
@@ -2608,7 +2612,6 @@ public class OrderController : ControllerBase
         catch (Exception ex)
         {
             await transaction.RollbackAsync();
-            _logger.LogError($"Error updating order item: {ex.Message}");
             _logger.LogError($"Error updating order item: {ex.Message}");
             return StatusCode(500, new { message = "An error occurred while updating the order item." });
         }
@@ -2632,7 +2635,6 @@ public class OrderController : ControllerBase
             if (order == null || order.RestaurantID != restaurantId)
                 return NotFound(new { message = "Order not found." });
 
-            // Check if order can be modified
             if (order.OrderStatus == OrderStatus.Completed || order.OrderStatus == OrderStatus.Served)
                 return BadRequest(new { message = "Cannot modify completed or served orders." });
 
@@ -2657,7 +2659,6 @@ public class OrderController : ControllerBase
                 Customizations = new List<OrderItemCustomization>()
             };
 
-            // Add customizations if provided
             if (payload.TryGetProperty("customizationOptionIds", out var customProp) && customProp.ValueKind == JsonValueKind.Array)
             {
                 foreach (var optElement in customProp.EnumerateArray())
@@ -2677,6 +2678,15 @@ public class OrderController : ControllerBase
 
             _orderRepository.CalculateOrderAmounts(order);
             await _orderRepository.ApplyBestAvailableOfferAsync(order);
+
+            // ✅ FIX: Find and update any associated pending payment with the new total
+            var pendingPayment = await _context.Payments
+                .FirstOrDefaultAsync(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Pending);
+
+            if (pendingPayment != null)
+            {
+                pendingPayment.Amount = order.TotalAmount;
+            }
 
             await LogOrderChange(orderId, "ITEM_ADDED",
                 $"Added {product.ProductName} (Qty: {quantity})", changedByUserId, restaurantId);
