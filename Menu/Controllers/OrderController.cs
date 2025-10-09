@@ -3070,15 +3070,11 @@ public class OrderController : ControllerBase
             payment.PaymentStatus = PaymentStatus.Success;
             payment.CompletedAt = DateTime.UtcNow;
 
-            // ✅ SIMPLE RULE: When payment is completed, move order to history
+            // Move order to history (Completed status)
             if (payment.Order != null)
             {
                 payment.Order.OrderStatus = OrderStatus.Completed;
                 payment.Order.ClosedAt = DateTime.UtcNow;
-
-                // ✅ IGNORE KITCHEN STATUS - Don't touch it at all
-                // Kitchen status remains whatever it was (Ready, Preparing, Pending, etc.)
-                // This doesn't affect the order going to history
             }
 
             await _context.SaveChangesAsync();
@@ -3088,20 +3084,16 @@ public class OrderController : ControllerBase
                 success = true,
                 message = "Payment completed successfully! Order moved to history.",
                 paymentId = payment.PaymentID,
-                orderId = payment.OrderID,
-                status = payment.PaymentStatus.ToString(),
-                orderStatus = payment.Order?.OrderStatus.ToString()
-                // ✅ No kitchen status in response - we don't care about it for payments
+                orderId = payment.OrderID
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error completing payment: {ex.Message}\n{ex.StackTrace}");
+            _logger.LogError($"Error completing payment: {ex.Message}");
             return StatusCode(500, new
             {
                 success = false,
-                message = "An error occurred while completing payment.",
-                error = ex.Message
+                message = "An error occurred while completing payment."
             });
         }
     }
