@@ -3106,6 +3106,81 @@ public class OrderController : ControllerBase
                 message = "An error occurred while completing payment."
             });
         }
+
+
+    }
+    // In: OrderController.cs
+
+    [HttpPut("{orderId}/change-table")]
+    public async Task<IActionResult> ChangeOrderTable(int orderId, [FromQuery] int restaurantId, [FromBody] JsonElement payload)
+    {
+        using var transaction = await _context.Database.BeginTransactionAsync();
+        try
+        {
+            // 1. Validate the incoming request payload
+            if (!payload.TryGetProperty("newTableNo", out var tableProp) ||
+                !payload.TryGetProperty("changedByUserId", out var changedByProp))
+            {
+                return BadRequest("newTableNo and changedByUserId are required.");
+            }
+
+            int newTableNo = tableProp.GetInt32();
+            int changedByUserId = changedByProp.GetInt32();
+
+            // 2. Find the order to be updated
+            var order = await _context.Orders
+                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+
+            if (order == null)
+            {
+                return NotFound(new { message = "Order not found." });
+            }
+
+            int oldTableNo = order.RestaurantTableID ?? 0;
+            if (oldTableNo == newTableNo)
+            {
+                // If the table is not actually changing, no action is needed.
+                return Ok(new { message = "Table number is already set to the requested value." });
+            }
+
+            // 3. Confirm the new table is valid for this restaurant
+            var tableExists = await _context.RestaurantTables
+                .AnyAsync(t => t.RestaurantTableID == newTableNo && t.RestaurantID == restaurantId);
+
+            if (!tableExists)
+            {
+                return BadRequest(new { message = $"Table number {newTableNo} is not valid for this restaurant." });
+            }
+
+            // 4. Update the order's table number
+            order.RestaurantTableID = newTableNo;
+
+            // 5. IMPORTANT: Also update the table number on any PENDING payments for this order
+            var pendingPayments = await _context.Payments
+                .Where(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Pending)
+                .ToListAsync();
+
+            foreach (var payment in pendingPayments)
+            {
+                payment.TableNo = newTableNo;
+            }
+
+            // 6. Log this action for auditing purposes
+            string description = $"Table changed from {oldTableNo} to {newTableNo}";
+            await LogOrderChange(orderId, "TABLE_CHANGED", description, changedByUserId, restaurantId);
+
+            // 7. Save all changes and commit the transaction
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return Ok(new { message = "Order table changed successfully." });
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            _logger.LogError($"Error changing order table for OrderID {orderId}: {ex.Message}");
+            return StatusCode(500, new { message = "An error occurred while changing the table." });
+        }
     }
     [HttpGet("with-waiter")]
     public async Task<IActionResult> GetOrdersWithWaiters([FromQuery] int restaurantId) // ✅ Add restaurantId parameter
