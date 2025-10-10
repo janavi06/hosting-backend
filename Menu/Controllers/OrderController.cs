@@ -1,6 +1,4 @@
-﻿
-
-using DinkToPdf;
+﻿using DinkToPdf;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -3333,5 +3331,3 @@ public class OrderController : ControllerBase
         });
     }
 }
-
-

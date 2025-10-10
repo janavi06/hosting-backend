@@ -103,29 +103,29 @@ public class OrderRepository : IOrderRepository
         order.UpdatedAt = DateTime.UtcNow;
         order.CreatedBy ??= "System";
         order.UpdatedBy ??= "System";
-        // Initially, set tax and service charge to 0.
         order.CGST = 0;
         order.SGST = 0;
         order.ServiceCharge = 0;
         order.OrderStatus = OrderStatus.Pending;
         order.KitchenStatus = KitchenStatus.Pending;
 
-        // ✅ CRITICAL FIX: Ensure all order items and their customizations have the correct RestaurantID
         foreach (var item in order.OrderItems)
         {
-            item.RestaurantID = order.RestaurantID; // Set restaurant ID for order item
-
-            // ✅ Set restaurant ID for each customization
+            item.RestaurantID = order.RestaurantID;
             foreach (var customization in item.Customizations)
             {
                 customization.RestaurantID = order.RestaurantID;
             }
         }
 
-        // Calculate order amounts based on order items
+        // First add and save the order → ensures OrderID is generated
+        _context.Orders.Add(order);
+        await _context.SaveChangesAsync();
+
+        // Now calculate totals and apply offers
         CalculateOrderAmounts(order);
 
-        _context.Orders.Add(order);
+        // Save again for totals and applied offer
         await _context.SaveChangesAsync();
 
         return order;
@@ -335,7 +335,6 @@ public class OrderRepository : IOrderRepository
     }
     public async Task ApplyBestAvailableOfferAsync(Order order)
     {
-        // Fetch active offers
         var offers = await _context.Offers
             .Where(o => o.IsActive && o.ValidFrom <= DateTime.UtcNow && o.ValidTo >= DateTime.UtcNow)
             .ToListAsync();
@@ -366,17 +365,16 @@ public class OrderRepository : IOrderRepository
         {
             order.AppliedOffer = bestOffer;
             order.DiscountAmount = maxDiscount;
-            order.TotalAmount = order.Subtotal + order.CGST + order.SGST + order.ServiceCharge - maxDiscount;
         }
         else
         {
             order.AppliedOffer = null;
             order.DiscountAmount = 0;
-            order.TotalAmount = order.Subtotal + order.CGST + order.SGST + order.ServiceCharge;
         }
 
-        _context.Orders.Update(order);
+        // Total recalculation handled by CalculateOrderAmounts
     }
+
 
 
     public async Task CreateKitchenNotificationAsync(int orderId, int tableNo)
@@ -450,6 +448,3 @@ public class OrderRepository : IOrderRepository
     }
 
 }
-
-
-
