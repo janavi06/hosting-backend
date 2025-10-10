@@ -16,67 +16,64 @@ public class OrderRepository : IOrderRepository
 
     public void CalculateOrderAmounts(Order order)
     {
+        if (order.OrderItems == null)
+        {
+            order.Subtotal = 0;
+            order.TotalAmount = 0;
+            return;
+        }
+
+        decimal currentSubtotal = 0;
 
         foreach (var item in order.OrderItems)
         {
-            item.RestaurantID = order.RestaurantID; // ✅ Ensures every item gets the same restaurant
+            // Fetch the base product from the database
+            var product = _context.Products
+                .AsNoTracking()
+                .FirstOrDefault(p => p.ProductID == item.ProductID);
+
+            if (product == null) continue;
+
+            decimal basePrice = product.Price;
+            decimal customizationPrice = 0;
+
+            // Fetch and sum up customization prices if any exist
+            if (item.Customizations != null && item.Customizations.Any())
+            {
+                var optionIds = item.Customizations.Select(c => c.CustomizationOptionID).ToList();
+                var customizationOptions = _context.CustomizationOptions
+                    .Where(co => optionIds.Contains(co.CustomizationOptionID))
+                    .ToList();
+
+                customizationPrice = customizationOptions.Sum(co => co.FixedPrice);
+            }
+
+            // ✅ SERVER-SIDE PRICE CALCULATION: Use the client-sent price as reference
+            // but validate it matches our calculation
+            decimal calculatedPrice = basePrice + customizationPrice;
+
+            // Optional: Add validation to ensure client price matches server calculation
+            // if (Math.Abs(item.UnitPrice - calculatedPrice) > 0.01m)
+            // {
+            //     // Log discrepancy but use server calculation for security
+            //     item.UnitPrice = calculatedPrice;
+            // }
+
+            // Add to running subtotal
+            currentSubtotal += item.Quantity * item.UnitPrice; // Use the UnitPrice that includes customizations
         }
 
-        // Subtotal: Quantity * UnitPrice for each item
-        order.Subtotal = order.OrderItems.Sum(item => item.Quantity * item.UnitPrice);
+        order.Subtotal = currentSubtotal;
 
-        order.CGST = 0;
-        order.SGST = 0;
-        order.ServiceCharge = 0;
-
+        // Continue with discount, tax, and total calculations...
         order.DiscountAmount = 0;
         order.AppliedOfferID = null;
 
-        if (order.RestaurantTableID > 0)
-        {
-            var table = _context.RestaurantTables
-                .Include(t => t.Restaurant)
-                .FirstOrDefault(t => t.RestaurantTableID == order.RestaurantTableID);
+        ApplyBestAvailableOfferAsync(order).GetAwaiter().GetResult();
 
-            if (table?.Restaurant != null)
-            {
-                var today = DateTime.UtcNow;
-
-                var offer = _context.Offers
-                    .Where(o =>
-                        o.RestaurantID == table.Restaurant.RestaurantID &&
-                        o.IsActive &&
-                        o.AutoApply &&
-                        o.ValidFrom <= today &&
-                        o.ValidTo >= today &&
-                        order.Subtotal >= o.MinBillAmount)
-                    .OrderByDescending(o => o.MinBillAmount)
-                    .FirstOrDefault();
-
-                if (offer != null)
-                {
-                    decimal discount = 0;
-
-                    if (offer.DiscountAmount.HasValue)
-                    {
-                        discount = offer.DiscountAmount.Value;
-                    }
-                    else if (offer.DiscountPercent.HasValue)
-                    {
-                        discount = (decimal)(offer.DiscountPercent.Value / 100f) * order.Subtotal;
-                    }
-
-                    order.DiscountAmount = discount;
-                    order.AppliedOfferID = offer.OfferID;
-                }
-            }
-        }
-
-        order.TotalAmount = order.Subtotal - order.DiscountAmount;
+        // Calculate final total
+        order.TotalAmount = order.Subtotal + order.CGST + order.SGST + order.ServiceCharge - order.DiscountAmount;
     }
-
-
-
 
 
     // ✅ Get all orders

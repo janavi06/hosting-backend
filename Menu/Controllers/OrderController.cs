@@ -121,7 +121,9 @@ public class OrderController : ControllerBase
                     Customizations = (inc.CustomizationOptionIds != null ? inc.CustomizationOptionIds : new List<int>())
                         .Select(id => new OrderItemCustomization
                         {
-                            CustomizationOptionID = id
+                            CustomizationOptionID = id,
+                            RestaurantID = restaurantId // ✅ ADD THIS
+
                         }).ToList()
                 });
             }
@@ -182,7 +184,6 @@ public class OrderController : ControllerBase
     {
         try
         {
-            // 🔍 Log entire payload for debug
             _logger.LogInformation("📦 Incoming OrderItems JSON: " + System.Text.Json.JsonSerializer.Serialize(orderItems));
 
             var existingOrder = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
@@ -233,7 +234,6 @@ public class OrderController : ControllerBase
                         AddedToKitchenAt = DateTime.UtcNow,
                         BatchID = 1,
                         RestaurantID = restaurantId,
-
                         Customizations = new List<OrderItemCustomization>()
                     };
 
@@ -243,7 +243,8 @@ public class OrderController : ControllerBase
                         {
                             newItem.Customizations.Add(new OrderItemCustomization
                             {
-                                CustomizationOptionID = optId
+                                CustomizationOptionID = optId,
+                                RestaurantID = restaurantId // ✅ FIX: Added RestaurantID
                             });
                         }
                     }
@@ -262,7 +263,6 @@ public class OrderController : ControllerBase
                     {
                         productID = item.ProductID,
                         quantity = item.Quantity
-
                     })
                 });
             }
@@ -305,7 +305,8 @@ public class OrderController : ControllerBase
                     {
                         newItem.Customizations.Add(new OrderItemCustomization
                         {
-                            CustomizationOptionID = optId
+                            CustomizationOptionID = optId,
+                            RestaurantID = restaurantId // ✅ FIX: Added RestaurantID
                         });
                     }
                 }
@@ -326,7 +327,6 @@ public class OrderController : ControllerBase
                 {
                     productID = item.ProductID,
                     quantity = item.Quantity
-
                 })
             });
         }
@@ -336,9 +336,6 @@ public class OrderController : ControllerBase
             return StatusCode(500, "An error occurred while adding items to the cart.");
         }
     }
-
-
-
 
 
     [HttpPost("{orderId}/updateSummary")]
@@ -3108,6 +3105,99 @@ public class OrderController : ControllerBase
         }
 
 
+    }
+    [HttpGet("report/comprehensive-sales")]
+    public async Task<IActionResult> GetComprehensiveSalesReport(
+    [FromQuery] DateTime? startDate,
+    [FromQuery] DateTime? endDate,
+    [FromQuery] int restaurantId)
+    {
+        try
+        {
+            endDate ??= DateTime.UtcNow;
+            startDate ??= endDate.Value.AddDays(-30);
+
+            var orders = await _context.Orders
+                .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+                .Include(o => o.Payments)
+                .Where(o => o.RestaurantID == restaurantId &&
+                           o.CreatedAt >= startDate && o.CreatedAt <= endDate)
+                .ToListAsync();
+
+            var restaurant = await _context.Restaurants.FindAsync(restaurantId);
+
+            var result = new
+            {
+                RestaurantInfo = new
+                {
+                    restaurant?.Name,
+                    restaurant?.Description,
+                    UPI_ID = restaurant?.UPI_ID,
+                    UPI_Name = restaurant?.UPI_Name
+                    // Removed Address and Phone since they don't exist in the model
+                },
+                ReportPeriod = new
+                {
+                    StartDate = startDate.Value.ToString("yyyy-MM-dd"),
+                    EndDate = endDate.Value.ToString("yyyy-MM-dd"),
+                    Days = (endDate.Value - startDate.Value).Days + 1
+                },
+                Summary = new
+                {
+                    TotalOrders = orders.Count,
+                    CompletedOrders = orders.Count(o => o.OrderStatus == OrderStatus.Completed),
+                    CancelledOrders = orders.Count(o => o.OrderStatus == OrderStatus.Cancelled),
+                    TotalRevenue = orders.Where(o => o.OrderStatus == OrderStatus.Completed).Sum(o => o.TotalAmount),
+                    AverageOrderValue = orders.Any(o => o.OrderStatus == OrderStatus.Completed) ?
+                        orders.Where(o => o.OrderStatus == OrderStatus.Completed).Average(o => o.TotalAmount) : 0,
+                    SuccessRate = orders.Any() ? (decimal)orders.Count(o => o.OrderStatus == OrderStatus.Completed) / orders.Count : 0
+                },
+                DailyBreakdown = orders
+                    .GroupBy(o => o.CreatedAt.Date)
+                    .Select(g => new
+                    {
+                        Date = g.Key.ToString("yyyy-MM-dd"),
+                        Orders = g.Count(),
+                        Revenue = g.Where(o => o.OrderStatus == OrderStatus.Completed).Sum(o => o.TotalAmount),
+                        AverageOrderValue = g.Where(o => o.OrderStatus == OrderStatus.Completed).Any() ?
+                            g.Where(o => o.OrderStatus == OrderStatus.Completed).Average(o => o.TotalAmount) : 0
+                    })
+                    .OrderBy(x => x.Date)
+                    .ToList(),
+                PaymentMethodAnalysis = orders
+                    .Where(o => o.Payments.Any())
+                    .GroupBy(o => o.Payments.OrderByDescending(p => p.CreatedAt).First().PaymentMethod)
+                    .Select(g => new
+                    {
+                        Method = g.Key,
+                        Count = g.Count(),
+                        Amount = g.Sum(o => o.TotalAmount),
+                        Percentage = orders.Where(o => o.Payments.Any()).Sum(o => o.TotalAmount) > 0 ?
+                            (g.Sum(o => o.TotalAmount) / orders.Where(o => o.Payments.Any()).Sum(o => o.TotalAmount)) * 100 : 0
+                    })
+                    .ToList(),
+                TopSellingItems = orders
+                    .SelectMany(o => o.OrderItems)
+                    .Where(oi => oi.Product != null)
+                    .GroupBy(oi => oi.Product.ProductName)
+                    .Select(g => new
+                    {
+                        Item = g.Key,
+                        Quantity = g.Sum(x => x.Quantity),
+                        Revenue = g.Sum(x => x.Quantity * x.UnitPrice)
+                    })
+                    .OrderByDescending(x => x.Revenue)
+                    .Take(10)
+                    .ToList()
+            };
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error generating comprehensive sales report: {ex.Message}");
+            return StatusCode(500, "An error occurred while generating the comprehensive report.");
+        }
     }
     // In: OrderController.cs
 
