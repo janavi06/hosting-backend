@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Restaurant_Menu.Models;
 using System;
 using System.Collections.Generic;
@@ -12,6 +12,38 @@ public class OrderRepository : IOrderRepository
     public OrderRepository(ApplicationDbContext context)
     {
         _context = context;
+    }
+
+    private async Task AdjustInventoryForProductAsync(int restaurantId, int productId, int orderId, int quantityDelta, string createdBy)
+    {
+        var recipes = await _context.ProductRecipes
+            .Where(r => r.ProductID == productId && r.RestaurantID == restaurantId)
+            .ToListAsync();
+
+        foreach (var recipe in recipes)
+        {
+            var item = await _context.InventoryItems
+                .FirstOrDefaultAsync(i => i.InventoryItemID == recipe.InventoryItemID && i.RestaurantID == restaurantId);
+            if (item == null) continue;
+
+            var qtyChange = -(recipe.QuantityPerUnit * quantityDelta);
+            item.CurrentQuantity += qtyChange;
+            item.UpdatedAt = DateTime.UtcNow;
+            item.UpdatedBy = createdBy;
+
+            _context.StockTransactions.Add(new StockTransaction
+            {
+                InventoryItemID = recipe.InventoryItemID,
+                RestaurantID = restaurantId,
+                TransactionType = quantityDelta >= 0 ? StockTransactionType.Sale : StockTransactionType.Return,
+                QuantityChange = qtyChange,
+                UnitCost = item.AverageUnitCost,
+                Reference = $"order:{orderId}",
+                Notes = quantityDelta >= 0 ? "Order sale deduction" : "Order item revert",
+                CreatedBy = createdBy,
+                TransactionTime = DateTime.UtcNow
+            });
+        }
     }
 
     public void CalculateOrderAmounts(Order order)
@@ -120,6 +152,13 @@ public class OrderRepository : IOrderRepository
 
         // First add and save the order → ensures OrderID is generated
         _context.Orders.Add(order);
+        await _context.SaveChangesAsync();
+
+        // Adjust inventory for all order items (recipe-based deduction)
+        foreach (var item in order.OrderItems)
+        {
+            await AdjustInventoryForProductAsync(order.RestaurantID, item.ProductID, order.OrderID, item.Quantity, order.CreatedBy ?? "System");
+        }
         await _context.SaveChangesAsync();
 
         // Now calculate totals and apply offers

@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Restaurant_Menu.Models;
 using System;
 using System.Collections.Generic;
@@ -12,6 +12,39 @@ public class OrderItemRepository : IOrderItemRepository
     public OrderItemRepository(ApplicationDbContext context)
     {
         _context = context;
+    }
+
+    private async Task AdjustInventoryForProductAsync(int restaurantId, int productId, int orderId, int quantityDelta, string createdBy)
+    {
+        // quantityDelta > 0 means sell; < 0 means revert
+        var recipes = await _context.ProductRecipes
+            .Where(r => r.ProductID == productId && r.RestaurantID == restaurantId)
+            .ToListAsync();
+
+        foreach (var recipe in recipes)
+        {
+            var item = await _context.InventoryItems
+                .FirstOrDefaultAsync(i => i.InventoryItemID == recipe.InventoryItemID && i.RestaurantID == restaurantId);
+            if (item == null) continue;
+
+            var qtyChange = -(recipe.QuantityPerUnit * quantityDelta); // sale reduces stock
+            item.CurrentQuantity += qtyChange;
+            item.UpdatedAt = DateTime.UtcNow;
+            item.UpdatedBy = createdBy;
+
+            _context.StockTransactions.Add(new StockTransaction
+            {
+                InventoryItemID = recipe.InventoryItemID,
+                RestaurantID = restaurantId,
+                TransactionType = quantityDelta >= 0 ? StockTransactionType.Sale : StockTransactionType.Return,
+                QuantityChange = qtyChange,
+                UnitCost = item.AverageUnitCost,
+                Reference = $"order:{orderId}",
+                Notes = quantityDelta >= 0 ? "Order sale deduction" : "Order item revert",
+                CreatedBy = createdBy,
+                TransactionTime = DateTime.UtcNow
+            });
+        }
     }
 
     public async Task<IEnumerable<OrderItem>> GetAllOrderItemsAsync()
@@ -43,15 +76,28 @@ public class OrderItemRepository : IOrderItemRepository
     {
         await ValidateOrderAndProduct(orderItem.OrderID, orderItem.ProductID);
 
-        orderItem.CreatedAt = DateTime.UtcNow;
-        orderItem.UpdatedAt = DateTime.UtcNow;
-        orderItem.CreatedBy ??= "DefaultUser";
-        orderItem.UpdatedBy ??= orderItem.CreatedBy;
+        using var transaction = await _context.Database.BeginTransactionAsync();
+        try
+        {
+            orderItem.CreatedAt = DateTime.UtcNow;
+            orderItem.UpdatedAt = DateTime.UtcNow;
+            orderItem.CreatedBy ??= "DefaultUser";
+            orderItem.UpdatedBy ??= orderItem.CreatedBy;
 
-        _context.OrderItems.Add(orderItem);
-        await _context.SaveChangesAsync();
+            _context.OrderItems.Add(orderItem);
+            await _context.SaveChangesAsync();
 
-        return orderItem;
+            await AdjustInventoryForProductAsync(orderItem.RestaurantID, orderItem.ProductID, orderItem.OrderID, orderItem.Quantity, orderItem.CreatedBy!);
+            await _context.SaveChangesAsync();
+
+            await transaction.CommitAsync();
+            return orderItem;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
     }
 
     public async Task AddOrderItemsAsync(ICollection<OrderItem> orderItems, int orderId)
@@ -78,6 +124,14 @@ public class OrderItemRepository : IOrderItemRepository
             }
 
             await _context.SaveChangesAsync();
+
+            // Adjust inventory for each item
+            foreach (var item in orderItems)
+            {
+                await AdjustInventoryForProductAsync(item.RestaurantID, item.ProductID, item.OrderID, item.Quantity, item.CreatedBy!);
+            }
+            await _context.SaveChangesAsync();
+
             await transaction.CommitAsync();
         }
         catch
@@ -93,13 +147,42 @@ public class OrderItemRepository : IOrderItemRepository
         if (existingItem == null)
             throw new KeyNotFoundException($"OrderItem ID {orderItem.OrderItemID} not found.");
 
-        existingItem.UpdatedBy = orderItem.UpdatedBy ?? "DefaultUser";
-        existingItem.UpdatedAt = DateTime.UtcNow;
+        using var transaction = await _context.Database.BeginTransactionAsync();
+        try
+        {
+            var actor = orderItem.UpdatedBy ?? "DefaultUser";
+            // If product changed, revert old and apply new
+            if (orderItem.ProductID != existingItem.ProductID)
+            {
+                await AdjustInventoryForProductAsync(existingItem.RestaurantID, existingItem.ProductID, existingItem.OrderID, -existingItem.Quantity, actor);
+                await AdjustInventoryForProductAsync(orderItem.RestaurantID, orderItem.ProductID, orderItem.OrderID, orderItem.Quantity, actor);
+            }
+            else
+            {
+                var delta = orderItem.Quantity - existingItem.Quantity;
+                if (delta != 0)
+                {
+                    await AdjustInventoryForProductAsync(existingItem.RestaurantID, existingItem.ProductID, existingItem.OrderID, delta, actor);
+                }
+            }
 
-        _context.OrderItems.Update(existingItem);
-        await _context.SaveChangesAsync();
+            // Update fields
+            existingItem.ProductID = orderItem.ProductID;
+            existingItem.Quantity = orderItem.Quantity;
+            existingItem.UnitPrice = orderItem.UnitPrice;
+            existingItem.UpdatedBy = actor;
+            existingItem.UpdatedAt = DateTime.UtcNow;
 
-        return existingItem;
+            _context.OrderItems.Update(existingItem);
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return existingItem;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
     }
 
     public async Task<bool> DeleteOrderItemAsync(int orderItemId)
@@ -107,9 +190,22 @@ public class OrderItemRepository : IOrderItemRepository
         var orderItem = await _context.OrderItems.FindAsync(orderItemId);
         if (orderItem == null) return false;
 
-        _context.OrderItems.Remove(orderItem);
-        await _context.SaveChangesAsync();
-        return true;
+        using var transaction = await _context.Database.BeginTransactionAsync();
+        try
+        {
+            // Revert inventory for this item
+            await AdjustInventoryForProductAsync(orderItem.RestaurantID, orderItem.ProductID, orderItem.OrderID, -orderItem.Quantity, orderItem.UpdatedBy ?? "System");
+
+            _context.OrderItems.Remove(orderItem);
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+            return true;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
     }
 
     public async Task<Order> GetOrderWithItemsAsync(int orderId)

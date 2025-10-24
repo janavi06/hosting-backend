@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Restaurant_Menu.Models;
 using Restaurant_System.Models;
 
@@ -47,6 +47,11 @@ public class ApplicationDbContext : DbContext
     public DbSet<CompetitiveAnalysis> CompetitiveAnalyses { get; set; }
 
     public DbSet<OrderChangeHistory> OrderChangeHistory { get; set; }
+
+    // NEW: Inventory DbSets
+    public DbSet<InventoryItem> InventoryItems { get; set; }
+    public DbSet<StockTransaction> StockTransactions { get; set; }
+    public DbSet<ProductRecipe> ProductRecipes { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -837,6 +842,95 @@ modelBuilder.Entity<Category>(entity =>
                   .OnDelete(DeleteBehavior.Restrict);
 
 
+        });
+
+        // INVENTORY ITEMS
+        modelBuilder.Entity<InventoryItem>(entity =>
+        {
+            entity.ToTable("inventoryitems");
+            entity.HasKey(e => e.InventoryItemID);
+
+            entity.Property(e => e.InventoryItemID).HasColumnName("inventoryitemid");
+            entity.Property(e => e.ItemName).HasColumnName("itemname").IsRequired().HasMaxLength(150);
+            entity.Property(e => e.SKU).HasColumnName("sku").HasMaxLength(50);
+            entity.Property(e => e.UnitOfMeasure).HasColumnName("unitofmeasure").HasMaxLength(50);
+            entity.Property(e => e.CurrentQuantity).HasColumnName("currentquantity").HasColumnType("decimal(18,3)");
+            entity.Property(e => e.ReorderLevel).HasColumnName("reorderlevel").HasColumnType("decimal(18,3)").HasDefaultValue(0);
+            entity.Property(e => e.AverageUnitCost).HasColumnName("averageunitcost").HasColumnType("decimal(18,2)").HasDefaultValue(0);
+            entity.Property(e => e.IsActive).HasColumnName("isactive").HasDefaultValue(true);
+            entity.Property(e => e.CreatedAt).HasColumnName("createdat").HasColumnType("timestamptz");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updatedat").HasColumnType("timestamptz");
+            entity.Property(e => e.CreatedBy).HasColumnName("createdby");
+            entity.Property(e => e.UpdatedBy).HasColumnName("updatedby");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasIndex(e => new { e.RestaurantID, e.ItemName }).IsUnique();
+            entity.HasIndex(e => new { e.RestaurantID, e.SKU });
+        });
+
+        // STOCK TRANSACTIONS
+        modelBuilder.Entity<StockTransaction>(entity =>
+        {
+            entity.ToTable("stocktransactions");
+            entity.HasKey(e => e.StockTransactionID);
+
+            entity.Property(e => e.StockTransactionID).HasColumnName("stocktransactionid");
+            entity.Property(e => e.InventoryItemID).HasColumnName("inventoryitemid");
+            entity.Property(e => e.TransactionType).HasColumnName("transactiontype").HasConversion<int>();
+            entity.Property(e => e.QuantityChange).HasColumnName("quantitychange").HasColumnType("decimal(18,3)");
+            entity.Property(e => e.UnitCost).HasColumnName("unitcost").HasColumnType("decimal(18,2)");
+            entity.Property(e => e.Reference).HasColumnName("reference");
+            entity.Property(e => e.Notes).HasColumnName("notes");
+            entity.Property(e => e.TransactionTime).HasColumnName("transactiontime").HasColumnType("timestamptz");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.CreatedBy).HasColumnName("createdby");
+
+            entity.HasOne(e => e.InventoryItem)
+                  .WithMany()
+                  .HasForeignKey(e => e.InventoryItemID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasIndex(e => new { e.RestaurantID, e.InventoryItemID, e.TransactionTime });
+        });
+
+        // PRODUCT RECIPES
+        modelBuilder.Entity<ProductRecipe>(entity =>
+        {
+            entity.ToTable("productrecipes");
+            entity.HasKey(e => e.ProductRecipeID);
+
+            entity.Property(e => e.ProductRecipeID).HasColumnName("productrecipeid");
+            entity.Property(e => e.ProductID).HasColumnName("productid");
+            entity.Property(e => e.InventoryItemID).HasColumnName("inventoryitemid");
+            entity.Property(e => e.QuantityPerUnit).HasColumnName("quantityperunit").HasColumnType("decimal(18,3)");
+            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+
+            entity.HasOne<InventoryItem>()
+                  .WithMany()
+                  .HasForeignKey(e => e.InventoryItemID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne<Product>()
+                  .WithMany()
+                  .HasForeignKey(e => e.ProductID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(e => e.Restaurant)
+                  .WithMany()
+                  .HasForeignKey(e => e.RestaurantID)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasIndex(e => new { e.RestaurantID, e.ProductID, e.InventoryItemID }).IsUnique();
         });
     }
 }
