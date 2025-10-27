@@ -395,45 +395,19 @@ public class OrderController : ControllerBase
         }
     }
 
+
     [HttpGet("{id}/summary")]
     public async Task<ActionResult> GetOrderSummary(int id, [FromQuery] int restaurantId)
     {
         try
         {
-            _logger.LogInformation($"Fetching order summary for OrderID: {id}, RestaurantID: {restaurantId}");
-
             var order = await _orderRepository.GetOrderByIdWithItemsAsync(id, restaurantId);
             if (order == null)
-            {
-                // Check if order exists at all
-                var orderExists = await _context.Orders.AnyAsync(o => o.OrderID == id);
+                return NotFound();
 
-                if (!orderExists)
-                {
-                    _logger.LogWarning($"Order {id} doesn't exist in database");
-                    return NotFound(new
-                    {
-                        message = $"Order {id} doesn't exist",
-                        suggestion = "Check the order ID or create a new order"
-                    });
-                }
-
-                // Check if order exists for different restaurant
-                var actualRestaurantId = await _context.Orders
-                    .Where(o => o.OrderID == id)
-                    .Select(o => o.RestaurantID)
-                    .FirstOrDefaultAsync();
-
-                _logger.LogWarning($"Order {id} exists but belongs to restaurant {actualRestaurantId} (requested: {restaurantId})");
-                return NotFound(new
-                {
-                    message = $"Order {id} belongs to a different restaurant",
-                    actualRestaurantId,
-                    requestedRestaurantId = restaurantId
-                });
-            }
-
+            // ✅ FIX: Ensure calculations include customizations
             _orderRepository.CalculateOrderAmounts(order);
+            await _context.SaveChangesAsync();
 
             var response = new
             {
@@ -441,52 +415,45 @@ public class OrderController : ControllerBase
                 orderID = order.OrderID,
                 orderStatus = order.OrderStatus.ToString(),
                 createdAt = order.CreatedAt,
-                orderItems = order.OrderItems.Select(item => new
-
+                orderItems = order.OrderItems.Select(item =>
                 {
-                    productID = item.ProductID,
-                    productName = item.Product?.ProductName,
-                    quantity = item.Quantity,
-                    unitPrice = item.UnitPrice,
-                    lineTotal = item.UnitPrice * item.Quantity,
+                    decimal basePrice = item.Product?.Price ?? 0;
+                    decimal customizationTotal = item.Customizations.Sum(c => c.CustomizationOption?.FixedPrice ?? 0);
+                    decimal totalUnitPrice = basePrice + customizationTotal;
 
-                    customizations = item.Customizations.Select(c => new
+                    return new
                     {
-                        c.CustomizationOptionID,
-                        c.CustomizationOption.Name,
-                        c.CustomizationOption.FixedPrice
-
-                    })
+                        productID = item.ProductID,
+                        productName = item.Product?.ProductName,
+                        quantity = item.Quantity,
+                        basePrice = basePrice,
+                        customizationTotal = customizationTotal,
+                        unitPrice = totalUnitPrice, // This now includes customizations
+                        lineTotal = totalUnitPrice * item.Quantity,
+                        customizations = item.Customizations.Select(c => new
+                        {
+                            c.CustomizationOptionID,
+                            c.CustomizationOption.Name,
+                            c.CustomizationOption.FixedPrice
+                        })
+                    };
                 }),
                 subtotal = order.Subtotal,
                 discountAmount = order.DiscountAmount,
-                appliedOffer = order.AppliedOffer != null ? new
-                {
-                    offerID = order.AppliedOffer.OfferID,
-                    description = order.AppliedOffer.Description,
-                    discountType = order.AppliedOffer.DiscountAmount.HasValue ? "Flat" : "Percent",
-                    discountValue = order.AppliedOffer.DiscountAmount ?? (decimal?)order.AppliedOffer.DiscountPercent
-                } : null,
                 cgst = order.CGST,
                 sgst = order.SGST,
                 serviceCharge = order.ServiceCharge,
                 totalAmount = order.TotalAmount
             };
 
-            _logger.LogInformation($"Successfully retrieved order {id} summary");
             return Ok(response);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, $"Error fetching order {id} summary for restaurant {restaurantId}");
-            return StatusCode(500, new
-            {
-                message = "An error occurred while fetching the order summary.",
-                details = ex.Message
-            });
+            _logger.LogError($"Error fetching order summary: {ex.Message}");
+            return StatusCode(500, "An error occurred while fetching the order summary.");
         }
     }
-
 
     [HttpGet("with-waiter/{waiterUserId}")]
     public IActionResult GetOrdersByWaiter(int waiterUserId)
@@ -3270,6 +3237,103 @@ public class OrderController : ControllerBase
             return StatusCode(500, new { message = "An error occurred while changing the table." });
         }
     }
+
+    [HttpPut("{orderId}/update")]
+    public async Task<IActionResult> UpdateOrder(int orderId, [FromBody] OrderUpdateRequest request, [FromQuery] int restaurantId)
+    {
+        try
+        {
+            var order = await _context.Orders
+                .Include(o => o.OrderItems)
+                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+
+            if (order == null)
+                return NotFound(new { message = "Order not found." });
+
+            // Update basic order information
+            order.CreatedAt = DateTime.Parse(request.CreatedAt).ToUniversalTime();
+            order.RestaurantTableID = request.TableNo;
+            order.OrderStatus = Enum.Parse<OrderStatus>(request.OrderStatus);
+            order.UpdatedAt = DateTime.UtcNow;
+
+            // Update order items
+            order.OrderItems.Clear();
+            foreach (var itemRequest in request.Items)
+            {
+                var orderItem = new OrderItem
+                {
+                    ProductID = itemRequest.ProductID,
+                    Quantity = itemRequest.Quantity,
+                    UnitPrice = itemRequest.UnitPrice,
+                    BatchID = 1,
+                    RestaurantID = restaurantId,
+                    IsPrepared = false,
+                    AddedToKitchenAt = DateTime.UtcNow,
+                    Customizations = itemRequest.Customizations?.Select(c => new OrderItemCustomization
+                    {
+                        CustomizationOptionID = c.OptionID,
+                        RestaurantID = restaurantId
+                    }).ToList() ?? new List<OrderItemCustomization>()
+                };
+                order.OrderItems.Add(orderItem);
+            }
+
+            // Update financials
+            order.Subtotal = request.Subtotal;
+            order.DiscountAmount = request.DiscountAmount;
+            order.CGST = request.CGST;
+            order.SGST = request.SGST;
+            order.ServiceCharge = request.ServiceCharge;
+            order.TotalAmount = request.TotalAmount;
+
+            // Update any pending payments
+            var pendingPayment = await _context.Payments
+                .FirstOrDefaultAsync(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Pending);
+
+            if (pendingPayment != null)
+            {
+                pendingPayment.Amount = request.TotalAmount;
+                pendingPayment.TableNo = request.TableNo;
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Order updated successfully", orderId = order.OrderID });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error updating order {orderId}: {ex.Message}");
+            return StatusCode(500, new { message = "An error occurred while updating the order." });
+        }
+    }
+
+    [HttpGet("restaurant/{restaurantId}/details")]
+    public async Task<IActionResult> GetRestaurantDetails(int restaurantId)
+    {
+        try
+        {
+            var restaurant = await _context.Restaurants
+                .FirstOrDefaultAsync(r => r.RestaurantID == restaurantId);
+
+            if (restaurant == null)
+                return NotFound(new { message = "Restaurant not found" });
+
+            return Ok(new
+            {
+                name = restaurant.Name,
+                address = restaurant.Address,
+                description = restaurant.Description,
+                upiId = restaurant.UPI_ID,
+                upiName = restaurant.UPI_Name
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error fetching restaurant details: {ex.Message}");
+            return StatusCode(500, "An error occurred while fetching restaurant details.");
+        }
+    }
+
     [HttpGet("with-waiter")]
     public async Task<IActionResult> GetOrdersWithWaiters([FromQuery] int restaurantId) // ✅ Add restaurantId parameter
     {
@@ -3280,6 +3344,7 @@ public class OrderController : ControllerBase
                 .ThenInclude(oi => oi.Customizations)
                 .ThenInclude(c => c.CustomizationOption)
             .Include(o => o.Payments.OrderByDescending(p => p.CreatedAt))
+
             .Where(o => o.RestaurantID == restaurantId) // ✅ CRITICAL: Add this filter
             .ToListAsync();
 

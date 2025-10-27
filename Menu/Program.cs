@@ -20,6 +20,7 @@ var builder = WebApplication.CreateBuilder(args);
 /*──────────────────────── 0. SERVICES ──────────────────────*/
 // HttpClient factory for OpenAI
 builder.Services.AddHttpClient();
+builder.Services.AddScoped<IPrintForwarder, PrintForwarder>();
 
 // Chatbot Service
 builder.Services.AddScoped<ChatbotService>();

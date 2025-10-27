@@ -20,16 +20,49 @@ public class OfferRepository : IOfferRepository
 
     public async Task<Offer> AddOfferAsync(Offer offer)
     {
-        _context.Offers.Add(offer);
-        await _context.SaveChangesAsync();
+        try
+        {
+            // Debug: Check if RestaurantID is properly set
+            Console.WriteLine($"🔍 DEBUG - Adding offer:");
+            Console.WriteLine($"  - RestaurantID: {offer.RestaurantID}");
+            Console.WriteLine($"  - Description: {offer.Description}");
+            Console.WriteLine($"  - Code: {offer.Code}");
+            Console.WriteLine($"  - Entity State: {_context.Entry(offer).State}");
 
-        // Invalidate cache
-        var cacheKey = $"offers_{offer.RestaurantID}";
-        _offerCache.Remove(cacheKey);
+            // Double-check that RestaurantID is set
+            if (offer.RestaurantID <= 0)
+            {
+                throw new InvalidOperationException($"RestaurantID must be set before saving offer. Current value: {offer.RestaurantID}");
+            }
 
-        return offer;
+            _context.Offers.Add(offer);
+
+            // Check the entity state after adding
+            Console.WriteLine($"  - Entity State after Add: {_context.Entry(offer).State}");
+
+            await _context.SaveChangesAsync();
+
+            // Invalidate cache
+            var cacheKey = $"offers_{offer.RestaurantID}";
+            _offerCache.Remove(cacheKey);
+
+            Console.WriteLine($"✅ DEBUG - Offer saved successfully with ID: {offer.OfferID}");
+            return offer;
+        }
+        catch (DbUpdateException dbEx)
+        {
+            // Log the detailed error
+            Console.WriteLine($"❌ Database error: {dbEx.InnerException?.Message}");
+            Console.WriteLine($"❌ Database error details: {dbEx}");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ General error: {ex.Message}");
+            Console.WriteLine($"❌ Stack trace: {ex.StackTrace}");
+            throw;
+        }
     }
-
     public async Task<List<Offer>> GetActiveOffersAsync(int restaurantId)
     {
         var cacheKey = $"offers_{restaurantId}";

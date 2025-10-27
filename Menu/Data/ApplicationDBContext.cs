@@ -788,27 +788,31 @@ modelBuilder.Entity<Category>(entity =>
 
         modelBuilder.Entity<Offer>(entity =>
         {
+            entity.ToTable("Offers"); // Explicitly set the table name
             entity.HasKey(o => o.OfferID);
 
-            entity.Property(o => o.Description).IsRequired();
-            entity.Property(o => o.MinBillAmount).HasDefaultValue(0);
-            entity.Property(o => o.IsActive).HasDefaultValue(true);
-            entity.Property(o => o.AutoApply).HasDefaultValue(true);
+            // ✅ CRITICAL: Explicitly map to the correct uppercase column
+            entity.Property(o => o.RestaurantID)
+                .HasColumnName("RestaurantID") // Map to "RestaurantID" not "restaurantid"
+                .IsRequired();
 
+            // ✅ Configure the relationship
             entity.HasOne(o => o.Restaurant)
-                  .WithMany() // or .WithMany(r => r.Offers) if you add ICollection<Offer> in Restaurant
+                  .WithMany()
                   .HasForeignKey(o => o.RestaurantID)
                   .OnDelete(DeleteBehavior.Cascade);
-            entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
 
-            entity.HasOne(e => e.Restaurant)
-                  .WithMany()
-                  .HasForeignKey(e => e.RestaurantID)
-                  .OnDelete(DeleteBehavior.Restrict);
-
-
+            // Map other properties explicitly
+            entity.Property(o => o.Code).HasColumnName("Code");
+            entity.Property(o => o.Description).HasColumnName("Description").IsRequired();
+            entity.Property(o => o.DiscountAmount).HasColumnName("DiscountAmount");
+            entity.Property(o => o.DiscountPercent).HasColumnName("DiscountPercent");
+            entity.Property(o => o.MinBillAmount).HasColumnName("MinBillAmount").HasDefaultValue(0);
+            entity.Property(o => o.ValidFrom).HasColumnName("ValidFrom");
+            entity.Property(o => o.ValidTo).HasColumnName("ValidTo");
+            entity.Property(o => o.IsActive).HasColumnName("IsActive").HasDefaultValue(true);
+            entity.Property(o => o.AutoApply).HasColumnName("AutoApply").HasDefaultValue(true);
         });
-
         // RESTAURANT
         modelBuilder.Entity<Restaurant>(entity =>
         {
@@ -820,6 +824,13 @@ modelBuilder.Entity<Category>(entity =>
             entity.Property(e => e.Description).HasColumnName("description");
             entity.Property(e => e.UPI_ID).HasColumnName("upi_id").HasMaxLength(150);
             entity.Property(e => e.UPI_Name).HasColumnName("upi_name").HasMaxLength(150);
+            entity.Property(e => e.KotPrinterName).HasColumnName("kotprintername").HasMaxLength(200);
+            entity.Property(e => e.Address) // ✅ ADDED
+      .HasColumnName("address")
+      .HasMaxLength(500); // Adjust length as needed
+            entity.Property(e => e.BillPrinterName).HasColumnName("billprintername").HasMaxLength(200);
+            entity.Property(e => e.LocalPrintServiceUrl).HasColumnName("localprintserviceurl").HasMaxLength(200);
+
         });
 
         // KITCHEN NOTIFICATIONS

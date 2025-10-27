@@ -69,7 +69,7 @@ public class OrderRepository : IOrderRepository
             decimal basePrice = product.Price;
             decimal customizationPrice = 0;
 
-            // Fetch and sum up customization prices if any exist
+            // ✅ FIX: Properly calculate customization prices
             if (item.Customizations != null && item.Customizations.Any())
             {
                 var optionIds = item.Customizations.Select(c => c.CustomizationOptionID).ToList();
@@ -80,34 +80,35 @@ public class OrderRepository : IOrderRepository
                 customizationPrice = customizationOptions.Sum(co => co.FixedPrice);
             }
 
-            // ✅ SERVER-SIDE PRICE CALCULATION: Use the client-sent price as reference
-            // but validate it matches our calculation
-            decimal calculatedPrice = basePrice + customizationPrice;
+            // ✅ FIX: Calculate the total unit price including customizations
+            decimal totalUnitPrice = basePrice + customizationPrice;
 
-            // Optional: Add validation to ensure client price matches server calculation
-            // if (Math.Abs(item.UnitPrice - calculatedPrice) > 0.01m)
-            // {
-            //     // Log discrepancy but use server calculation for security
-            //     item.UnitPrice = calculatedPrice;
-            // }
+            // ✅ FIX: Update the item's unit price to include customizations
+            item.UnitPrice = totalUnitPrice;
 
             // Add to running subtotal
-            currentSubtotal += item.Quantity * item.UnitPrice; // Use the UnitPrice that includes customizations
+            currentSubtotal += item.Quantity * totalUnitPrice;
+
+            Console.WriteLine($"💰 Item {item.ProductID}: Base={basePrice}, Customizations={customizationPrice}, TotalUnit={totalUnitPrice}, Qty={item.Quantity}, LineTotal={item.Quantity * totalUnitPrice}");
         }
 
         order.Subtotal = currentSubtotal;
+        Console.WriteLine($"📊 Order {order.OrderID} Subtotal: {order.Subtotal}");
 
-        // Continue with discount, tax, and total calculations...
+        // Apply discount if any
         order.DiscountAmount = 0;
         order.AppliedOfferID = null;
 
-        ApplyBestAvailableOfferAsync(order).GetAwaiter().GetResult();
+        // Calculate taxes and service charge
+        //order.CGST = order.Subtotal * 0.025m; // 2.5%
+        //order.SGST = order.Subtotal * 0.025m; // 2.5%
+        //order.ServiceCharge = order.Subtotal * 0.05m; // 5%
 
         // Calculate final total
         order.TotalAmount = order.Subtotal + order.CGST + order.SGST + order.ServiceCharge - order.DiscountAmount;
+
+        Console.WriteLine($"🎯 Order {order.OrderID} Final Total: {order.TotalAmount}");
     }
-
-
     // ✅ Get all orders
     public async Task<IEnumerable<Order>> GetAllOrdersAsync(int restaurantId)
     {
