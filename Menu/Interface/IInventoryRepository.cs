@@ -14,6 +14,11 @@ namespace Restaurant_Menu.Interface
         // Stock Transactions
         Task<StockTransaction> AddTransactionAsync(StockTransaction tx);
         Task<IEnumerable<StockTransaction>> GetTransactionsAsync(int restaurantId, int? itemId = null, DateTime? from = null, DateTime? to = null);
+        Task DeductInventoryForOrderAsync(
+    Order order,
+    string reference,
+    string? createdBy = null
+);
 
         // Recipe
         Task<IEnumerable<ProductRecipe>> GetProductRecipeAsync(int productId, int restaurantId);

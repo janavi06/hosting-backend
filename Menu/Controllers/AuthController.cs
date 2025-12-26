@@ -23,56 +23,81 @@ namespace Restaurant_Menu.Controllers
             _config = config;
         }
 
-        [HttpPost("register")]
-        public async Task<IActionResult> Register([FromBody] User newUser)
-        {
-            // whitelist allowed roles
-            var role = newUser.UserRole?.Trim();
-            if (role != "Waiter" && role != "Customer" && role != "Kitchen")
-                return BadRequest("Invalid role");
-
-            newUser.UserRole = role;
-            newUser.CreatedAt = DateTime.UtcNow;
-            newUser.UpdatedAt = DateTime.UtcNow;
-            newUser.PasswordHash = _hasher.HashPassword(newUser, newUser.PasswordHash!);
-
-            var created = await _userRepository.AddUserAsync(newUser);
-            return CreatedAtAction(null, new { id = created.UserID }, new { created.UserID });
-        }
-
-
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] Dictionary<string, string> creds)
         {
             if (!creds.ContainsKey("email") || !creds.ContainsKey("password"))
-                return BadRequest("Email & password required");
+                return BadRequest("Email and password are required.");
 
-            var user = await _userRepository.GetByEmailAsync(creds["email"]);
-            if (user == null) return Unauthorized();
+            var email = creds["email"];
+            var password = creds["password"];
 
-            var result = _hasher.VerifyHashedPassword(user, user.PasswordHash!, creds["password"]);
-            if (result == PasswordVerificationResult.Failed) return Unauthorized();
+            var user = await _userRepository.GetByEmailAsync(email);
+            if (user == null || !user.IsAvailable)
+                return Unauthorized("Invalid credentials.");
 
-            var jwtSettings = _config.GetSection("Jwt");
-            var key = Encoding.ASCII.GetBytes(jwtSettings["Key"]);
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var tokenDesc = new SecurityTokenDescriptor
+            // Restaurant validation - ensure user belongs to the restaurant they're trying to access
+            if (creds.ContainsKey("restaurantId") && int.TryParse(creds["restaurantId"], out int requestedRestaurantId))
             {
-                Subject = new ClaimsIdentity(new[]
+                if (user.RestaurantID != requestedRestaurantId)
                 {
-                    new Claim(ClaimTypes.NameIdentifier, user.UserID.ToString()),
-                    new Claim(ClaimTypes.Role,           user.UserRole)
-                }),
-                Expires = DateTime.UtcNow.AddMinutes(int.Parse(jwtSettings["DurationInMinutes"])),
-                Issuer = jwtSettings["Issuer"],
-                Audience = jwtSettings["Audience"],
-                SigningCredentials = new SigningCredentials(
-                    new SymmetricSecurityKey(key),
-                    SecurityAlgorithms.HmacSha256Signature)
-            };
+                    return Unauthorized($"User not authorized for restaurant {requestedRestaurantId}");
+                }
+            }
 
-            var token = tokenHandler.CreateToken(tokenDesc);
-            return Ok(new { token = tokenHandler.WriteToken(token) });
+            bool isPlainTextPassword = string.IsNullOrEmpty(user.PasswordHash) ||
+                                      !user.PasswordHash.StartsWith("AQAAAA");
+
+            if (isPlainTextPassword)
+            {
+                if (user.PasswordHash == password)
+                {
+                    user.PasswordHash = _hasher.HashPassword(user, password);
+                    await _userRepository.UpdateUserAsync(user);
+                }
+                else
+                {
+                    return Unauthorized("Invalid credentials.");
+                }
+            }
+            else
+            {
+                var verifyResult = _hasher.VerifyHashedPassword(user, user.PasswordHash!, password);
+                if (verifyResult == PasswordVerificationResult.Failed)
+                    return Unauthorized("Invalid credentials.");
+            }
+
+            // Generate JWT with restaurant claim
+            var jwtSection = _config.GetSection("Jwt");
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSection["Key"]!));
+            var credsSigning = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+            var claims = new[]
+            {
+        new Claim(ClaimTypes.NameIdentifier, user.UserID.ToString()),
+        new Claim(ClaimTypes.Role, user.UserRole),
+        new Claim("restaurantId", user.RestaurantID.ToString()),
+        new Claim(ClaimTypes.Email, user.Email) // Add email to claims
+    };
+
+            var token = new JwtSecurityToken(
+                issuer: jwtSection["Issuer"],
+                audience: jwtSection["Audience"],
+                claims: claims,
+                expires: DateTime.UtcNow.AddMinutes(int.Parse(jwtSection["DurationInMinutes"]!)),
+                signingCredentials: credsSigning
+            );
+
+            var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+
+            return Ok(new
+            {
+                token = tokenString,
+                userId = user.UserID,
+                restaurantId = user.RestaurantID,
+                role = user.UserRole,
+                email = user.Email
+            });
         }
     }
 }

@@ -25,4 +25,7 @@ public interface IOrderRepository
     Task<IEnumerable<Order>> GetOrdersWithDetailsAsync(int restaurantId);
     Task<Order> AddItemToOrderAsync(int orderId, OrderItem orderItem);
     Task<Order> RemoveItemFromOrderAsync(int orderId, int productId);
+
+    Task<Order> UpdateOrderWithoutTrackingAsync(Order order); // ✅ ADD THIS
+
 }

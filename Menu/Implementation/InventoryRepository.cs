@@ -98,6 +98,97 @@ namespace Restaurant_Menu.Repositories
             return tx;
         }
 
+        public async Task DeductInventoryForOrderAsync(
+    Order order,
+    string reference,
+    string? createdBy = null)
+        {
+            if (order == null || order.OrderItems == null || !order.OrderItems.Any())
+                return;
+
+            var restaurantId = order.RestaurantID;
+
+            // 1?? Load recipes for products in order
+            var productIds = order.OrderItems.Select(o => o.ProductID).Distinct().ToList();
+
+            var recipes = await _context.ProductRecipes
+                .Where(r => productIds.Contains(r.ProductID) && r.RestaurantID == restaurantId)
+                .ToListAsync();
+
+            // 2?? Aggregate required quantity per InventoryItem
+            var requiredMap = new Dictionary<int, decimal>();
+
+            foreach (var item in order.OrderItems)
+            {
+                var productRecipes = recipes.Where(r => r.ProductID == item.ProductID);
+
+                foreach (var recipe in productRecipes)
+                {
+                    var requiredQty = recipe.QuantityPerUnit * item.Quantity;
+
+                    if (requiredMap.ContainsKey(recipe.InventoryItemID))
+                        requiredMap[recipe.InventoryItemID] += requiredQty;
+                    else
+                        requiredMap[recipe.InventoryItemID] = requiredQty;
+                }
+            }
+
+            if (!requiredMap.Any()) return;
+
+            // 3?? Load inventory rows
+            var inventoryItems = await _context.InventoryItems
+                .Where(i => requiredMap.Keys.Contains(i.InventoryItemID)
+                            && i.RestaurantID == restaurantId)
+                .ToListAsync();
+
+            // 4?? Validate stock availability
+            var errors = new List<string>();
+
+            foreach (var kv in requiredMap)
+            {
+                var inv = inventoryItems.FirstOrDefault(i => i.InventoryItemID == kv.Key);
+                if (inv == null)
+                {
+                    errors.Add($"Inventory item {kv.Key} not found");
+                    continue;
+                }
+
+                if (inv.CurrentQuantity < kv.Value)
+                {
+                    errors.Add($"{inv.ItemName} (needed {kv.Value}, available {inv.CurrentQuantity})");
+                }
+            }
+
+            if (errors.Any())
+                throw new InvalidOperationException(string.Join(" | ", errors));
+
+            // 5?? Deduct stock & log transaction
+            foreach (var kv in requiredMap)
+            {
+                var inv = inventoryItems.First(i => i.InventoryItemID == kv.Key);
+
+                inv.CurrentQuantity -= kv.Value;
+                inv.UpdatedAt = DateTime.UtcNow;
+                inv.UpdatedBy = createdBy;
+
+                _context.StockTransactions.Add(new StockTransaction
+                {
+                    InventoryItemID = inv.InventoryItemID,
+                    TransactionType = StockTransactionType.Sale,
+                    QuantityChange = -kv.Value,
+                    UnitCost = inv.AverageUnitCost,
+                    Reference = reference,
+                    Notes = $"Order #{order.OrderNumber}",
+                    TransactionTime = DateTime.UtcNow,
+                    RestaurantID = restaurantId,
+                    CreatedBy = createdBy
+                });
+            }
+
+            await _context.SaveChangesAsync();
+        }
+
+
         public async Task<IEnumerable<StockTransaction>> GetTransactionsAsync(int restaurantId, int? itemId = null, DateTime? from = null, DateTime? to = null)
         {
             var q = _context.StockTransactions.AsNoTracking().Where(x => x.RestaurantID == restaurantId);

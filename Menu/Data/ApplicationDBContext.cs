@@ -94,6 +94,7 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.CreatedBy).HasColumnName("createdby");
             entity.Property(e => e.UpdatedBy).HasColumnName("updatedby");
             entity.Property(e => e.RestaurantID).HasColumnName("restaurantid");
+            entity.Property(e => e.TableNo).HasColumnName("tableno"); // ✅ NEW COLUMN
 
             entity.HasOne(e => e.Restaurant)
                   .WithMany()
@@ -593,6 +594,7 @@ modelBuilder.Entity<Category>(entity =>
                   .HasColumnName("source")
                   .HasConversion<int>();
 
+            entity.Property(e => e.OrderNumber).HasColumnName("ordernumber");
 
         });
 

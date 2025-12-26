@@ -11,6 +11,9 @@
         public string? UpdatedBy { get; set; }
 
 
+        public int TableNo { get; set; }
+
+
         // ✅ New: RestaurantID Link
         public int RestaurantID { get; set; }
         public Restaurant? Restaurant { get; set; }  // Navigation Property

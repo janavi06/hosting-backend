@@ -80,6 +80,7 @@ namespace Restaurant_Menu.Models
 
         public int RestaurantID { get; set; }
         public Restaurant? Restaurant { get; set; }
+        public int OrderNumber { get; set; }   // Local per-restaurant running number
 
         public int? CustomerID { get; set; }  // Nullable, optional field
 

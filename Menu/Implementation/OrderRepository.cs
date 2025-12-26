@@ -8,10 +8,12 @@ using System.Threading.Tasks;
 public class OrderRepository : IOrderRepository
 {
     private readonly ApplicationDbContext _context;
+    private readonly ILogger<OrderRepository> _logger;
 
-    public OrderRepository(ApplicationDbContext context)
+    public OrderRepository(ApplicationDbContext context, ILogger<OrderRepository> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     private async Task AdjustInventoryForProductAsync(int restaurantId, int productId, int orderId, int quantityDelta, string createdBy)
@@ -46,6 +48,17 @@ public class OrderRepository : IOrderRepository
         }
     }
 
+    
+    public async Task<IEnumerable<Order>> GetAllOrdersAsync(int restaurantId)
+    {
+        return await _context.Orders
+            .Where(o => o.RestaurantID == restaurantId)
+            .Include(o => o.OrderItems)
+            .ToListAsync();
+    }
+
+    // In OrderRepository.cs
+
     public void CalculateOrderAmounts(Order order)
     {
         if (order.OrderItems == null)
@@ -69,21 +82,24 @@ public class OrderRepository : IOrderRepository
             decimal basePrice = product.Price;
             decimal customizationPrice = 0;
 
-            // ✅ FIX: Properly calculate customization prices
+            // ✅ NEW ROBUST LOGIC:
+            // Instead of relying on navigation properties, we fetch prices
+            // directly from the database using the IDs we already have.
             if (item.Customizations != null && item.Customizations.Any())
             {
-                var optionIds = item.Customizations.Select(c => c.CustomizationOptionID).ToList();
-                var customizationOptions = _context.CustomizationOptions
-                    .Where(co => optionIds.Contains(co.CustomizationOptionID))
-                    .ToList();
+                // Get all the Option IDs from the current item
+                var optionIds = item.Customizations
+                                    .Select(c => c.CustomizationOptionID)
+                                    .ToList();
 
-                customizationPrice = customizationOptions.Sum(co => co.FixedPrice);
+                customizationPrice = item.Customizations.Sum(c =>
+      c.CustomizationOption?.FixedPrice ?? 0m); // Use 0m for decimal
             }
 
-            // ✅ FIX: Calculate the total unit price including customizations
+            // Calculate the total unit price including customizations
             decimal totalUnitPrice = basePrice + customizationPrice;
 
-            // ✅ FIX: Update the item's unit price to include customizations
+            // Update the item's unit price to include customizations
             item.UnitPrice = totalUnitPrice;
 
             // Add to running subtotal
@@ -96,29 +112,18 @@ public class OrderRepository : IOrderRepository
         Console.WriteLine($"📊 Order {order.OrderID} Subtotal: {order.Subtotal}");
 
         // Apply discount if any
-        order.DiscountAmount = 0;
-        order.AppliedOfferID = null;
+        order.DiscountAmount = order.DiscountAmount;
 
-        // Calculate taxes and service charge
-        //order.CGST = order.Subtotal * 0.025m; // 2.5%
-        //order.SGST = order.Subtotal * 0.025m; // 2.5%
-        //order.ServiceCharge = order.Subtotal * 0.05m; // 5%
+        // Calculate taxes and service charge (uncomment if needed)
+        // order.CGST = order.Subtotal * 0.025m; // 2.5%
+        // order.SGST = order.Subtotal * 0.025m; // 2.5%
+        // order.ServiceCharge = order.Subtotal * 0.05m; // 5%
 
         // Calculate final total
         order.TotalAmount = order.Subtotal + order.CGST + order.SGST + order.ServiceCharge - order.DiscountAmount;
 
         Console.WriteLine($"🎯 Order {order.OrderID} Final Total: {order.TotalAmount}");
     }
-    // ✅ Get all orders
-    public async Task<IEnumerable<Order>> GetAllOrdersAsync(int restaurantId)
-    {
-        return await _context.Orders
-            .Where(o => o.RestaurantID == restaurantId)
-            .Include(o => o.OrderItems)
-            .ToListAsync();
-    }
-
-
     // ✅ Get order by ID
     public async Task<Order?> GetOrderByIdAsync(int orderId, int restaurantId)
     {
@@ -126,7 +131,16 @@ public class OrderRepository : IOrderRepository
             .Include(o => o.OrderItems)
             .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
     }
+    // ✅ NEW: Helper method to get next order number for a restaurant
+private async Task<int> GetNextOrderNumberAsync(int restaurantId)
+{
+    var lastOrder = await _context.Orders
+        .Where(o => o.RestaurantID == restaurantId)
+        .OrderByDescending(o => o.OrderNumber)
+        .FirstOrDefaultAsync();
 
+    return (lastOrder?.OrderNumber ?? 0) + 1;
+}
 
     // ✅ Add new order - UPDATED VERSION
     public async Task<Order> AddOrderAsync(Order order)
@@ -142,12 +156,43 @@ public class OrderRepository : IOrderRepository
         order.OrderStatus = OrderStatus.Pending;
         order.KitchenStatus = KitchenStatus.Pending;
 
+        // ✅ NEW: If OrderNumber is not set, get the next one for the restaurant
+        if (order.OrderNumber == 0)
+        {
+            order.OrderNumber = await GetNextOrderNumberAsync(order.RestaurantID);
+        }
+
+        // ✅ FIX: Handle customizations properly - don't create new CustomizationOption entities
         foreach (var item in order.OrderItems)
         {
             item.RestaurantID = order.RestaurantID;
-            foreach (var customization in item.Customizations)
+
+            // ✅ FIX: Ensure we're only setting IDs for existing customization options
+            if (item.Customizations != null && item.Customizations.Any())
             {
-                customization.RestaurantID = order.RestaurantID;
+                var validCustomizations = new List<OrderItemCustomization>();
+
+                foreach (var customization in item.Customizations)
+                {
+                    // ✅ Check if the customization option exists
+                    var existingOption = await _context.CustomizationOptions
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(co => co.CustomizationOptionID == customization.CustomizationOptionID);
+
+                    if (existingOption != null)
+                    {
+                        // ✅ Only add the relationship, don't create new CustomizationOption
+                        validCustomizations.Add(new OrderItemCustomization
+                        {
+                            CustomizationOptionID = customization.CustomizationOptionID,
+                            RestaurantID = order.RestaurantID
+                            // ✅ Don't set the navigation property to avoid tracking issues
+                        });
+                    }
+                }
+
+                // ✅ Replace with valid customizations
+                item.Customizations = validCustomizations;
             }
         }
 
@@ -171,36 +216,173 @@ public class OrderRepository : IOrderRepository
         return order;
     }
 
-
-
-    // ✅ Get order by ID with items (updated to return the full tracked entity)
     public async Task<Order?> GetOrderByIdWithItemsAsync(int orderId, int restaurantId)
     {
         return await _context.Orders
+            // .AsNoTracking() // ✅ REMOVE THIS LINE
+            .Include(o => o.OrderItems)
+                .ThenInclude(oi => oi.Product) // Include Product
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Customizations)
-                    .ThenInclude(oic => oic.CustomizationOption)
-            .Include(o => o.OrderItems)
-                .ThenInclude(oi => oi.Product)
-            .Include(o => o.AppliedOffer) // Don't forget to include the offer
+                .ThenInclude(c => c.CustomizationOption) // Include Customizations
+            .Include(o => o.AppliedOffer)
             .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
     }
 
+    public async Task<Order> UpdateOrderWithoutTrackingAsync(Order order)
+    {
+        try
+        {
+            // ✅ FIX: Use a completely fresh approach - find the order without tracking
+            var existingOrder = await _context.Orders
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Customizations)
+                .FirstOrDefaultAsync(o => o.OrderID == order.OrderID);
+
+            if (existingOrder == null)
+            {
+                throw new Exception($"Order with ID {order.OrderID} not found.");
+            }
+
+            // Update basic order properties
+            existingOrder.UpdatedAt = DateTime.UtcNow;
+            existingOrder.UpdatedBy = order.UpdatedBy ?? "System";
+            existingOrder.OrderStatus = order.OrderStatus;
+            existingOrder.KitchenStatus = order.KitchenStatus;
+            existingOrder.Subtotal = order.Subtotal;
+            existingOrder.DiscountAmount = order.DiscountAmount;
+            existingOrder.CGST = order.CGST;
+            existingOrder.SGST = order.SGST;
+            existingOrder.ServiceCharge = order.ServiceCharge;
+            existingOrder.TotalAmount = order.TotalAmount;
+            existingOrder.AppliedOfferID = order.AppliedOfferID;
+
+            // ✅ NEW: Preserve OrderNumber
+            existingOrder.OrderNumber = order.OrderNumber;
+
+            // ✅ FIX: Clear existing items and add new ones
+            existingOrder.OrderItems.Clear();
+
+            foreach (var newItem in order.OrderItems)
+            {
+                var orderItem = new OrderItem
+                {
+                    ProductID = newItem.ProductID,
+                    Quantity = newItem.Quantity,
+                    UnitPrice = newItem.UnitPrice,
+                    IsPrepared = newItem.IsPrepared,
+                    AddedToKitchenAt = newItem.AddedToKitchenAt,
+                    PreparedAt = newItem.PreparedAt,
+                    BatchID = newItem.BatchID,
+                    RestaurantID = newItem.RestaurantID,
+                    Customizations = new List<OrderItemCustomization>()
+                };
+
+                // Add customizations - only set the ID, not the navigation property
+                if (newItem.Customizations != null && newItem.Customizations.Any())
+                {
+                    foreach (var customization in newItem.Customizations)
+                    {
+                        orderItem.Customizations.Add(new OrderItemCustomization
+                        {
+                            CustomizationOptionID = customization.CustomizationOptionID,
+                            RestaurantID = customization.RestaurantID
+                        });
+                    }
+                }
+
+                existingOrder.OrderItems.Add(orderItem);
+            }
+
+            await _context.SaveChangesAsync();
+
+            // Return the updated order by fetching it fresh
+            return await GetOrderByIdWithItemsAsync(order.OrderID, order.RestaurantID);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error in UpdateOrderWithoutTrackingAsync: {ex.Message}");
+            throw;
+        }
+    }
 
     public async Task<Order> UpdateOrderAsync(Order order)
     {
-        // Assume 'order' is already tracked.
-        order.UpdatedAt = DateTime.UtcNow;
-        order.UpdatedBy = order.UpdatedBy ?? "System";
+        try
+        {
+            // ✅ FIX: Use a fresh approach to avoid tracking conflicts
+            var existingOrder = await _context.Orders
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Customizations)
+                .FirstOrDefaultAsync(o => o.OrderID == order.OrderID);
 
-        // Recalculate the amounts after update.
-        CalculateOrderAmounts(order);
+            if (existingOrder == null)
+            {
+                throw new Exception($"Order with ID {order.OrderID} not found.");
+            }
 
-        await _context.SaveChangesAsync();
+            _context.ChangeTracker.Entries<CustomizationOption>().ToList()
+                .ForEach(entry => entry.State = EntityState.Detached);
 
-        return order;
+            existingOrder.UpdatedAt = DateTime.UtcNow;
+            existingOrder.UpdatedBy = order.UpdatedBy ?? "System";
+            existingOrder.OrderStatus = order.OrderStatus;
+            existingOrder.KitchenStatus = order.KitchenStatus;
+            existingOrder.Subtotal = order.Subtotal;
+            existingOrder.DiscountAmount = order.DiscountAmount;
+            existingOrder.CGST = order.CGST;
+            existingOrder.SGST = order.SGST;
+            existingOrder.ServiceCharge = order.ServiceCharge;
+            existingOrder.TotalAmount = order.TotalAmount;
+            existingOrder.AppliedOfferID = order.AppliedOfferID;
+
+            existingOrder.OrderNumber = order.OrderNumber;
+
+
+            // Handle order items - clear and re-add to avoid complex tracking
+            existingOrder.OrderItems.Clear();
+
+            foreach (var newItem in order.OrderItems)
+            {
+                var orderItem = new OrderItem
+                {
+                    ProductID = newItem.ProductID,
+                    Quantity = newItem.Quantity,
+                    UnitPrice = newItem.UnitPrice,
+                    IsPrepared = newItem.IsPrepared,
+                    AddedToKitchenAt = newItem.AddedToKitchenAt,
+                    PreparedAt = newItem.PreparedAt,
+                    BatchID = newItem.BatchID,
+                    RestaurantID = newItem.RestaurantID,
+                    Customizations = new List<OrderItemCustomization>()
+                };
+
+                // Add customizations without tracking the CustomizationOption entities
+                if (newItem.Customizations != null && newItem.Customizations.Any())
+                {
+                    foreach (var customization in newItem.Customizations)
+                    {
+                        orderItem.Customizations.Add(new OrderItemCustomization
+                        {
+                            CustomizationOptionID = customization.CustomizationOptionID,
+                            RestaurantID = customization.RestaurantID
+                            // ✅ Don't set the navigation property to avoid tracking
+                        });
+                    }
+                }
+
+                existingOrder.OrderItems.Add(orderItem);
+            }
+
+            await _context.SaveChangesAsync();
+            return existingOrder;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error in UpdateOrderAsync: {ex.Message}");
+            throw;
+        }
     }
-
 
     public async Task<IEnumerable<Order>> GetPendingOrdersAsync(int restaurantId)
     {
@@ -342,11 +524,11 @@ public class OrderRepository : IOrderRepository
             .Include(o => o.Waiter)
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
+            .OrderByDescending(o => o.OrderNumber) 
             .ToListAsync();
     }
 
 
-    // ✅ Remove item from an order
     public async Task<Order> RemoveItemFromOrderAsync(int orderId, int productId)
     {
         var order = await _context.Orders
@@ -419,11 +601,15 @@ public class OrderRepository : IOrderRepository
 
     public async Task CreateKitchenNotificationAsync(int orderId, int tableNo)
     {
+        // ✅ NEW: Get the order to access OrderNumber
+        var order = await _context.Orders.FindAsync(orderId);
+        if (order == null) return;
+
         var notification = new KitchenNotification
         {
             OrderId = orderId,
             TableNo = tableNo,
-            Message = $"Order #{orderId} from Table {tableNo} is ready to serve"
+            Message = $"Order #{order.OrderNumber} from Table {tableNo} is ready to serve" // ✅ Use OrderNumber
         };
 
         _context.KitchenNotifications.Add(notification);

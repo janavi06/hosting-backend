@@ -25,15 +25,13 @@ public class RestaurantTableRepository : IRestaurantTableRepository
         return await query.ToListAsync();
     }
 
-
-
-
     public async Task<RestaurantTable> GetTableByIdAsync(int tableId)
     {
         return await _context.RestaurantTables
             .Include(t => t.Restaurant)
             .FirstOrDefaultAsync(t => t.RestaurantTableID == tableId);
     }
+
     public async Task<RestaurantTable?> GetTableByTableNameAsync(string tableIdentifier)
     {
         // Try to parse as number (table ID)
@@ -49,18 +47,38 @@ public class RestaurantTableRepository : IRestaurantTableRepository
             .Include(rt => rt.Restaurant)
             .FirstOrDefaultAsync(rt => rt.TableName == tableIdentifier);
     }
+
+    // ✅ NEW: Get table by table number and restaurant
+    public async Task<RestaurantTable?> GetTableByTableNoAsync(int tableNo, int restaurantId)
+    {
+        return await _context.RestaurantTables
+            .Include(t => t.Restaurant)
+            .FirstOrDefaultAsync(t => t.TableNo == tableNo && t.RestaurantID == restaurantId);
+    }
+
+    // ✅ NEW: Get table by table number with restaurant info
+    public async Task<RestaurantTable?> GetTableByTableNoWithRestaurantAsync(int tableNo)
+    {
+        return await _context.RestaurantTables
+            .Include(t => t.Restaurant)
+            .FirstOrDefaultAsync(t => t.TableNo == tableNo);
+    }
+
     public async Task<RestaurantTable> AddTableAsync(RestaurantTable restaurantTable)
     {
         _context.RestaurantTables.Add(restaurantTable);
         await _context.SaveChangesAsync();
         return restaurantTable;
     }
+
     public async Task<IEnumerable<RestaurantTable>> GetAllTablesByRestaurantAsync(int restaurantId)
     {
         return await _context.RestaurantTables
             .Where(t => t.RestaurantID == restaurantId)
+            .OrderBy(t => t.TableNo) // ✅ Order by table number
             .ToListAsync();
     }
+
     public async Task<RestaurantTable?> GetTableByIdWithRestaurantAsync(int tableId)
     {
         return await _context.RestaurantTables
