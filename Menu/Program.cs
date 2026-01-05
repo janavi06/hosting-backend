@@ -27,12 +27,11 @@ builder.Services.AddScoped<ChatbotService>();
 
 /*──────────────────────── 1. CORS ────────────────────────*/
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
-    .WithOrigins(
-        "http://localhost:4200"
-       )
+    .AllowAnyOrigin()
     .AllowAnyHeader()
     .AllowAnyMethod()
-    .AllowCredentials()));
+));
+
 
 /*──────────────────────── 2. SignalR ─────────────────────*/
 builder.Services.AddSignalR();

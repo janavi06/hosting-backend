@@ -56,74 +56,70 @@ public class OrderRepository : IOrderRepository
             .Include(o => o.OrderItems)
             .ToListAsync();
     }
+    // =========================
+    // 🔐 PRICE CALCULATOR
+    // =========================
+    public async Task<decimal> CalculateUnitPriceAsync(
+        int productId,
+        List<int>? customizationOptionIds,
+        int restaurantId)
+    {
+        var basePrice = await _context.Products
+            .Where(p => p.ProductID == productId && p.RestaurantID == restaurantId)
+            .Select(p => p.Price)
+            .FirstOrDefaultAsync();
 
-    // In OrderRepository.cs
+        if (basePrice <= 0)
+            throw new Exception($"Invalid price for ProductID {productId}");
+
+        decimal customizationTotal = 0;
+
+        if (customizationOptionIds != null && customizationOptionIds.Any())
+        {
+            customizationTotal = await _context.CustomizationOptions
+                .Where(c =>
+                    customizationOptionIds.Contains(c.CustomizationOptionID) &&
+                    c.RestaurantID == restaurantId)
+                .SumAsync(c => c.FixedPrice);
+        }
+
+        return basePrice + customizationTotal;
+    }
+
 
     public void CalculateOrderAmounts(Order order)
     {
-        if (order.OrderItems == null)
+        if (order == null)
+            throw new ArgumentNullException(nameof(order));
+
+        if (order.OrderItems == null || !order.OrderItems.Any())
         {
-            order.Subtotal = 0;
-            order.TotalAmount = 0;
+            order.Subtotal = 0m;
+            order.TotalAmount = 0m;
             return;
         }
 
-        decimal currentSubtotal = 0;
+        decimal subtotal = 0m;
 
         foreach (var item in order.OrderItems)
         {
-            // Fetch the base product from the database
-            var product = _context.Products
-                .AsNoTracking()
-                .FirstOrDefault(p => p.ProductID == item.ProductID);
-
-            if (product == null) continue;
-
-            decimal basePrice = product.Price;
-            decimal customizationPrice = 0;
-
-            // ✅ NEW ROBUST LOGIC:
-            // Instead of relying on navigation properties, we fetch prices
-            // directly from the database using the IDs we already have.
-            if (item.Customizations != null && item.Customizations.Any())
-            {
-                // Get all the Option IDs from the current item
-                var optionIds = item.Customizations
-                                    .Select(c => c.CustomizationOptionID)
-                                    .ToList();
-
-                customizationPrice = item.Customizations.Sum(c =>
-      c.CustomizationOption?.FixedPrice ?? 0m); // Use 0m for decimal
-            }
-
-            // Calculate the total unit price including customizations
-            decimal totalUnitPrice = basePrice + customizationPrice;
-
-            // Update the item's unit price to include customizations
-            item.UnitPrice = totalUnitPrice;
-
-            // Add to running subtotal
-            currentSubtotal += item.Quantity * totalUnitPrice;
-
-            Console.WriteLine($"💰 Item {item.ProductID}: Base={basePrice}, Customizations={customizationPrice}, TotalUnit={totalUnitPrice}, Qty={item.Quantity}, LineTotal={item.Quantity * totalUnitPrice}");
+            subtotal += item.UnitPrice * item.Quantity;
         }
 
-        order.Subtotal = currentSubtotal;
-        Console.WriteLine($"📊 Order {order.OrderID} Subtotal: {order.Subtotal}");
+        order.Subtotal = subtotal;
 
-        // Apply discount if any
-        order.DiscountAmount = order.DiscountAmount;
-
-        // Calculate taxes and service charge (uncomment if needed)
-        // order.CGST = order.Subtotal * 0.025m; // 2.5%
-        // order.SGST = order.Subtotal * 0.025m; // 2.5%
-        // order.ServiceCharge = order.Subtotal * 0.05m; // 5%
-
-        // Calculate final total
-        order.TotalAmount = order.Subtotal + order.CGST + order.SGST + order.ServiceCharge - order.DiscountAmount;
-
-        Console.WriteLine($"🎯 Order {order.OrderID} Final Total: {order.TotalAmount}");
+        // ✅ These are already non-null decimals — no ??= needed
+        order.TotalAmount =
+            order.Subtotal
+            + order.CGST
+            + order.SGST
+            + order.ServiceCharge
+            - order.DiscountAmount;
     }
+
+
+
+
     // ✅ Get order by ID
     public async Task<Order?> GetOrderByIdAsync(int orderId, int restaurantId)
     {
@@ -219,15 +215,17 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
     public async Task<Order?> GetOrderByIdWithItemsAsync(int orderId, int restaurantId)
     {
         return await _context.Orders
-            // .AsNoTracking() // ✅ REMOVE THIS LINE
             .Include(o => o.OrderItems)
-                .ThenInclude(oi => oi.Product) // Include Product
+                .ThenInclude(oi => oi.Product)
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Customizations)
-                .ThenInclude(c => c.CustomizationOption) // Include Customizations
-            .Include(o => o.AppliedOffer)
-            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+                    .ThenInclude(c => c.CustomizationOption)
+            .Include(o => o.Payments)
+            .FirstOrDefaultAsync(o =>
+                o.OrderID == orderId &&
+                o.RestaurantID == restaurantId);
     }
+
 
     public async Task<Order> UpdateOrderWithoutTrackingAsync(Order order)
     {
