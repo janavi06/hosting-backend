@@ -28,10 +28,11 @@ builder.Services.AddCors(options =>
     options.AddPolicy("ScanUI", policy =>
     {
         policy
-            .WithOrigins(
-                "https://menu-view-scanui.netlify.app",
-                "https://menu.scanui.in"
-            )
+           .WithOrigins(
+    "http://localhost:4200",
+    "https://app.scanui.site"
+)
+
             .AllowAnyHeader()
             .AllowAnyMethod();
     });

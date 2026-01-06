@@ -706,40 +706,46 @@ public class OrderController : ControllerBase
         try
         {
             var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
-            if (order == null || order.RestaurantID != restaurantId)
-                return NotFound(new { message = "Order not found for this restaurant." });
+            if (order == null) return NotFound(new { message = "Order not found." });
 
+            // Logic: You can serve an order if it is Confirmed
             if (order.OrderStatus != OrderStatus.Confirmed)
             {
-                return BadRequest(new { message = $"Order cannot be served from its current state: {order.OrderStatus}." });
+                return BadRequest(new { message = $"Cannot serve order in {order.OrderStatus} state." });
             }
 
-          
+            // Check if a successful payment exists for this order
             var isPaid = await _context.Payments
                 .AnyAsync(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Success);
 
-            order.OrderStatus = OrderStatus.Served;
+            if (isPaid)
+            {
+                // If already paid (Pay Now flow), serving completes the order
+                order.OrderStatus = OrderStatus.Completed;
+                order.ClosedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                // If not paid (Pay Later flow), mark as Served (awaiting payment)
+                order.OrderStatus = OrderStatus.Served;
+            }
+
             order.UpdatedAt = DateTime.UtcNow;
-
-
-            await _orderRepository.UpdateOrderAsync(order);
+            await _context.SaveChangesAsync();
 
             return Ok(new
             {
-                message = "Order marked as served. Data will stay on dashboard until payment is verified.",
-                orderID = order.OrderID,
-                orderNumber = order.OrderNumber,
+                message = isPaid ? "Order completed (Paid & Served)" : "Order served (Awaiting Payment)",
                 orderStatus = order.OrderStatus.ToString(),
                 isPaid = isPaid
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError($"Error serving order: {ex.Message}\n{ex.StackTrace}");
-            return StatusCode(500, "An error occurred while serving the order.");
+            _logger.LogError(ex, "Error serving order");
+            return StatusCode(500, "Internal server error");
         }
     }
-
     [HttpPut("{orderId}/complete")]
     public async Task<IActionResult> CompleteOrder(int orderId, [FromQuery] int restaurantId)
     {
@@ -2137,33 +2143,42 @@ public class OrderController : ControllerBase
     }
 
     [HttpPut("payments/{paymentId}/complete")]
-    public async Task<IActionResult> CompletePayment(
-    int paymentId,
-    [FromQuery] int restaurantId)
+    public async Task<IActionResult> CompletePayment(int paymentId, [FromQuery] int restaurantId)
     {
         var payment = await _context.Payments
             .Include(p => p.Order)
                 .ThenInclude(o => o.OrderItems)
                     .ThenInclude(oi => oi.Product)
-            .FirstOrDefaultAsync(p =>
-                p.PaymentID == paymentId &&
-                p.RestaurantID == restaurantId);
+            .FirstOrDefaultAsync(p => p.PaymentID == paymentId && p.RestaurantID == restaurantId);
 
-        if (payment == null)
-            return NotFound(new { message = "Payment not found." });
+        if (payment == null) return NotFound(new { message = "Payment not found." });
+        if (payment.PaymentStatus == PaymentStatus.Success) return BadRequest("Payment already completed.");
 
-        if (payment.PaymentStatus == PaymentStatus.Success)
-            return BadRequest("Payment already completed.");
-
+        // 1. Update Payment Status
         payment.PaymentStatus = PaymentStatus.Success;
         payment.CompletedAt = DateTime.UtcNow;
 
+        // 2. Update Order Lifecycle
         var order = payment.Order;
-        order.OrderStatus = OrderStatus.Completed;
-        order.ClosedAt = DateTime.UtcNow;
+        if (order != null)
+        {
+            // If it was already served (Pay Later flow), mark as Completed.
+            // If it was NOT served yet (Pay Now flow), keep it as Confirmed so waiter can serve it.
+            if (order.OrderStatus == OrderStatus.Served)
+            {
+                order.OrderStatus = OrderStatus.Completed;
+                order.ClosedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                // Keep it Confirmed so it remains on the Waiter Dashboard "To Serve" list
+                order.OrderStatus = OrderStatus.Confirmed;
+            }
+        }
 
         await _context.SaveChangesAsync();
 
+        // 3. Trigger Printing (Keep your existing FirePrint logic here)
         var printer = await GetPrinterConfig(restaurantId, "BILL");
         if (printer != null)
         {
@@ -2172,36 +2187,19 @@ public class OrderController : ControllerBase
                 Type = "BILL",
                 PrinterName = printer.PrinterName,
                 RestaurantName = printer.HeaderText,
-                RestaurantAddress = printer.Address,
-                Footer = printer.FooterText,
                 Order = new
                 {
                     OrderNumber = order.OrderNumber,
                     TableNo = order.RestaurantTableID,
-                    Items = order.OrderItems.Select(i => new
-                    {
-                        Name = i.Product?.ProductName,
-                        Qty = i.Quantity,
-                        Price = i.UnitPrice
-                    }),
-                    ServiceCharge = order.ServiceCharge,
-                    Tax = order.CGST + order.SGST,
-                    Discount = order.DiscountAmount,
+                    Items = order.OrderItems.Select(i => new { Name = i.Product?.ProductName, Qty = i.Quantity, Price = i.UnitPrice }),
                     Total = order.TotalAmount
                 }
             };
-
-            FirePrintAsync(printPayload);
+            _ = FirePrintAsync(printPayload);
         }
 
-        return Ok(new
-        {
-            success = true,
-            message = "Payment completed & bill printed",
-            orderNumber = order.OrderNumber
-        });
+        return Ok(new { success = true, message = "Payment successful", orderStatus = order.OrderStatus.ToString() });
     }
-
 
 
 
@@ -2549,21 +2547,24 @@ public class OrderController : ControllerBase
     }
 
 
-
     [HttpGet("manager/reports/items")]
-    public async Task<IActionResult> GetItemReport(
-     int restaurantId,
-     DateTime startDate,
-     DateTime endDate)
+    public async Task<IActionResult> GetItemReport(int restaurantId, DateTime startDate, DateTime endDate)
     {
         var (startUtc, endUtc) = NormalizeDateRange(startDate, endDate);
 
-        var data = await _context.OrderItems
-            .Where(i =>
-                i.Order.RestaurantID == restaurantId &&
-                i.Order.CreatedAt >= startUtc &&
-                i.Order.CreatedAt <= endUtc &&
-                i.Order.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
+        var items = await _context.OrderItems
+            .Include(i => i.Product)
+            .Include(i => i.Order)
+                .ThenInclude(o => o.Payments)
+            .Where(i => i.Order.RestaurantID == restaurantId &&
+                        i.Order.CreatedAt >= startUtc &&
+                        i.Order.CreatedAt <= endUtc &&
+                        // CRITICAL: Any order that has a successful payment is considered a sale
+                        i.Order.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .ToListAsync();
+
+        var reportData = items
+            .Where(i => i.Product != null)
             .GroupBy(i => i.Product.ProductName)
             .Select(g => new
             {
@@ -2572,18 +2573,26 @@ public class OrderController : ControllerBase
                 revenue = g.Sum(x => x.Quantity * x.UnitPrice)
             })
             .OrderByDescending(x => x.quantitySold)
-            .ToListAsync();
+            .ToList();
 
-        return Ok(data);
+        return Ok(reportData);
     }
+
 
     [HttpGet("manager/reports/categories")]
     public async Task<IActionResult> GetCategoryReport(int restaurantId)
     {
         var data = await _context.OrderItems
-            .Where(i =>
-                i.Order.RestaurantID == restaurantId &&
-                i.Order.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .Include(i => i.Product)
+                .ThenInclude(p => p.Category)
+            .Include(i => i.Order)
+                .ThenInclude(o => o.Payments)
+            .Where(i => i.Order.RestaurantID == restaurantId &&
+                        i.Order.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .ToListAsync();
+
+        var groupedData = data
+            .Where(i => i.Product?.Category != null)
             .GroupBy(i => i.Product.Category.CategoryName)
             .Select(g => new
             {
@@ -2592,11 +2601,10 @@ public class OrderController : ControllerBase
                 revenue = g.Sum(x => x.Quantity * x.UnitPrice)
             })
             .OrderByDescending(x => x.revenue)
-            .ToListAsync();
+            .ToList();
 
-        return Ok(data);
+        return Ok(groupedData);
     }
-
 
     [HttpGet("manager/reports/live-orders")]
     public async Task<IActionResult> GetLiveOrders(int restaurantId)
