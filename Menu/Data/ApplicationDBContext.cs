@@ -14,6 +14,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<SubCategory> SubCategories { get; set; }
 
     public DbSet<RestaurantPrinter> RestaurantPrinters { get; set; }
+    public DbSet<PrintJob> PrintJobs { get; set; }
 
     public DbSet<Product> Products { get; set; }
     public DbSet<Payment> Payments { get; set; }

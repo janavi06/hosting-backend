@@ -412,7 +412,35 @@ public class OrderController : ControllerBase
             await _context.SaveChangesAsync();
             await tx.CommitAsync();
 
-            await PrintKot(order, restaurantId, "NEW ORDER");
+            var printer = await GetPrinterConfig(restaurantId, "KOT");
+            if (printer != null)
+            {
+                var payload = new
+                {
+                    Type = "KOT",
+                    PrinterName = printer.PrinterName,
+                    RestaurantName = printer.HeaderText,
+                    RestaurantAddress = printer.Address,
+                    Footer = "",  
+
+                    Order = new
+                    {
+                        OrderNumber = order.OrderNumber.ToString(),
+                        TableNo = order.RestaurantTableID?.ToString() ?? "0",
+                        Items = order.OrderItems.Select(i => new
+                        {
+                            Name = i.Product?.ProductName,
+                            Qty = i.Quantity,
+                            Modifiers = i.Customizations
+                                .Select(c => c.CustomizationOption?.Name)
+                                .Where(x => x != null)
+                                .ToList()
+                        }).ToList()
+                    }
+                };
+
+                await SavePrintJob(restaurantId, payload);
+            }
 
             return Ok(new
             {
@@ -2178,25 +2206,7 @@ public class OrderController : ControllerBase
 
         await _context.SaveChangesAsync();
 
-        // 3. Trigger Printing (Keep your existing FirePrint logic here)
-        var printer = await GetPrinterConfig(restaurantId, "BILL");
-        if (printer != null)
-        {
-            var printPayload = new
-            {
-                Type = "BILL",
-                PrinterName = printer.PrinterName,
-                RestaurantName = printer.HeaderText,
-                Order = new
-                {
-                    OrderNumber = order.OrderNumber,
-                    TableNo = order.RestaurantTableID,
-                    Items = order.OrderItems.Select(i => new { Name = i.Product?.ProductName, Qty = i.Quantity, Price = i.UnitPrice }),
-                    Total = order.TotalAmount
-                }
-            };
-            _ = FirePrintAsync(printPayload);
-        }
+     
 
         return Ok(new { success = true, message = "Payment successful", orderStatus = order.OrderStatus.ToString() });
     }
@@ -2394,7 +2404,6 @@ public class OrderController : ControllerBase
             return StatusCode(500, new { message = "Error checking payment status." });
         }
     }
-
     [HttpPost("{orderId}/print-bill")]
     public async Task<IActionResult> PrintBill(
     int orderId,
@@ -2420,27 +2429,27 @@ public class OrderController : ControllerBase
             PrinterName = printer.PrinterName,
             RestaurantName = printer.HeaderText,
             RestaurantAddress = printer.Address,
-            Footer = printer.FooterText,
+            Footer = string.IsNullOrWhiteSpace(printer.FooterText)
+                ? "Thank you, visit again"
+                : printer.FooterText,
+
             Order = new
             {
-                OrderNumber = order.OrderNumber,
-                TableNo = order.RestaurantTableID,
+                OrderNumber = order.OrderNumber.ToString(),
+                TableNo = order.RestaurantTableID?.ToString() ?? "0",
+
                 Items = order.OrderItems.Select(i => new
                 {
                     Name = i.Product?.ProductName,
                     Qty = i.Quantity,
                     Price = i.UnitPrice
-                }),
-                Subtotal = order.Subtotal,
-                Discount = order.DiscountAmount,
-                CGST = order.CGST,
-                SGST = order.SGST,
-                ServiceCharge = order.ServiceCharge,
+                }).ToList(),
+
                 Total = order.TotalAmount
             }
         };
 
-        FirePrintAsync(payload);
+        await SavePrintJob(restaurantId, payload);
 
         return Ok(new
         {
@@ -2449,6 +2458,7 @@ public class OrderController : ControllerBase
             orderNumber = order.OrderNumber
         });
     }
+
     private (DateTime startUtc, DateTime endUtc) NormalizeDateRange(DateTime start, DateTime end)
     {
         var startUtc = DateTime.SpecifyKind(start.Date, DateTimeKind.Utc);
@@ -2688,7 +2698,88 @@ public class OrderController : ControllerBase
         }));
     }
 
+    [HttpGet("manager/reports/dashboard-stats")]
+    public async Task<IActionResult> GetManagerDashboardStats([FromQuery] int restaurantId)
+    {
+        // Set time range for Today (UTC)
+        var todayUtc = DateTime.UtcNow.Date;
+        var tomorrowUtc = todayUtc.AddDays(1);
 
+        // 1. Fetch orders with necessary related data using eager loading
+        // .ThenInclude is critical here to prevent the NullReferenceException on Product
+        var orders = await _context.Orders
+            .Include(o => o.Payments)
+            .Include(o => o.OrderItems)
+                .ThenInclude(oi => oi.Product)
+            .Where(o => o.RestaurantID == restaurantId && o.CreatedAt >= todayUtc && o.CreatedAt < tomorrowUtc)
+            .ToListAsync();
+
+        // 2. Filter for paid orders to calculate financial KPIs
+        var paidOrders = orders.Where(o => o.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success)).ToList();
+        var totalRevenue = paidOrders.Sum(o => o.TotalAmount);
+        var totalOrders = paidOrders.Count;
+
+        // AOV (Average Order Value) Calculation
+        var avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+        // 3. Peak Hour Analysis (Grouped by Hour)
+        var hourlySales = orders
+            .GroupBy(o => o.CreatedAt.Hour)
+            .Select(g => new {
+                Hour = g.Key,
+                Sales = g.Sum(o => o.TotalAmount),
+                Count = g.Count(),
+                // Percent used for frontend bar chart scaling
+                Percent = totalRevenue > 0 ? (g.Sum(o => o.TotalAmount) / totalRevenue) * 100 : 0
+            })
+            .OrderBy(h => h.Hour)
+            .ToList();
+
+        // 4. Payment Method Breakdown (UPI, Cash, etc.)
+        var paymentBreakdown = orders
+            .SelectMany(o => o.Payments)
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .GroupBy(p => p.PaymentMethod)
+            .Select(g => new {
+                Mode = g.Key,
+                Amount = g.Sum(p => p.Amount),
+                Percent = totalOrders > 0 ? Math.Round((decimal)g.Count() / totalOrders * 100, 1) : 0
+            })
+            .ToList();
+
+        // 5. Table Turnover Rate 
+        // Measures how many unique orders were served per table today
+        var totalTables = await _context.RestaurantTables.CountAsync(t => t.RestaurantID == restaurantId);
+        var tableTurnover = totalTables > 0 ? Math.Round((double)totalOrders / totalTables, 2) : 0;
+
+        // 6. Top 5 Best Sellers
+        // Added safety check (i.Product != null) to prevent crash if a product record is missing
+        var topItems = orders
+            .SelectMany(o => o.OrderItems)
+            .Where(i => i.Product != null)
+            .GroupBy(i => i.Product.ProductName)
+            .Select(g => new {
+                Name = g.Key,
+                Qty = g.Sum(x => x.Quantity),
+                Revenue = g.Sum(x => x.Quantity * x.UnitPrice),
+                Contribution = totalRevenue > 0 ? Math.Round((g.Sum(x => x.Quantity * x.UnitPrice) / totalRevenue) * 100, 1) : 0
+            })
+            .OrderByDescending(x => x.Qty)
+            .Take(5)
+            .ToList();
+
+        // Return the consolidated data for the dashboard UI
+        return Ok(new
+        {
+            totalRevenue,
+            totalOrders,
+            avgOrderValue,
+            tableTurnover,
+            hourlySales,
+            payments = paymentBreakdown,
+            topItems
+        });
+    }
 
 
     [HttpGet("with-waiter")]
@@ -2753,132 +2844,19 @@ public class OrderController : ControllerBase
         });
     }
 
-private async Task FirePrintAsync(object printPayload)
-{
-    try
+
+    private async Task SavePrintJob(int restaurantId, object payload)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        var json = JsonConvert.SerializeObject(printPayload);
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-        var printServiceUrl = "http://localhost:9000/api/print"; 
-        var resp = await client.PostAsync(printServiceUrl, content);
-
-        var respText = await resp.Content.ReadAsStringAsync();
-        _logger.LogInformation($"PrintService response {resp.StatusCode}: {respText}");
-
-        if (!resp.IsSuccessStatusCode)
+        _context.PrintJobs.Add(new PrintJob
         {
-            _logger.LogError($"PrintService returned failure: {resp.StatusCode} -> {respText}");
-        }
+            RestaurantID = restaurantId,
+            PayloadJson = JsonConvert.SerializeObject(payload),
+            Status = "PENDING",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        await _context.SaveChangesAsync();
     }
-    catch (Exception ex)
-    {
-        _logger.LogError("🖨️ FirePrint failed: " + ex.ToString());
-    }
-}
-
-
-
-    private async Task PrintKot(
-        Order order,
-        int restaurantId,
-        string footer,
-        List<OrderItem>? itemsOverride = null)
-    {
-        var printer = await GetPrinterConfig(restaurantId, "KOT");
-        if (printer == null) return;
-
-        var items = itemsOverride ?? order.OrderItems;
-
-        var payload = new
-        {
-            Type = "KOT",
-            PrinterName = printer.PrinterName,
-
-            RestaurantName = string.IsNullOrWhiteSpace(printer.HeaderText)
-                ? "KITCHEN ORDER"
-                : printer.HeaderText,
-
-            RestaurantAddress = string.IsNullOrWhiteSpace(printer.Address)
-                ? ""
-                : printer.Address,
-
-            Footer = string.IsNullOrWhiteSpace(footer)
-                ? "NEW ORDER"
-                : footer,
-
-            Order = new
-            {
-                OrderNumber = order.OrderNumber.ToString(),               
-                TableNo = order.RestaurantTableID?.ToString() ?? "0",     
-
-                Items = items.Select(i => new
-                {
-                    Name = i.Product?.ProductName ?? "Item",
-                    Qty = i.Quantity,
-                    Price = i.UnitPrice,
-                    Modifiers = i.Customizations
-                        .Select(c => c.CustomizationOption?.Name)
-                        .Where(x => x != null)
-                        .ToList()                                        
-                }).ToList()
-            }
-        };
-
-        _ = FirePrintAsync(payload);
-    }
-
-
-
-    private async Task PrintBill(Order order, int restaurantId)
-    {
-        var printer = await GetPrinterConfig(restaurantId, "BILL");
-        if (printer == null) return;
-
-        var payload = new
-        {
-            Type = "BILL",
-            PrinterName = printer.PrinterName,
-
-            RestaurantName = string.IsNullOrWhiteSpace(printer.HeaderText)
-                ? "RESTAURANT"
-                : printer.HeaderText,
-
-            RestaurantAddress = string.IsNullOrWhiteSpace(printer.Address)
-                ? ""
-                : printer.Address,
-
-            Footer = string.IsNullOrWhiteSpace(printer.FooterText)
-                ? "Thank you! Visit again."
-                : printer.FooterText,
-
-            Order = new
-            {
-                OrderNumber = order.OrderNumber.ToString(),               
-                TableNo = order.RestaurantTableID?.ToString() ?? "0",     
-
-                Items = order.OrderItems.Select(i => new
-                {
-                    Name = i.Product?.ProductName ?? "Item",
-                    Qty = i.Quantity,
-                    Price = i.UnitPrice,
-                    Modifiers = i.Customizations
-                        .Select(c => c.CustomizationOption?.Name)
-                        .Where(x => x != null)
-                        .ToList()
-                }).ToList(),
-
-                ServiceCharge = order.ServiceCharge,
-                Discount = order.DiscountAmount,
-                Total = order.TotalAmount,
-                Notes = ""
-            }
-        };
-
-        _ = FirePrintAsync(payload);
-    }
-
 
 
     private async Task<RestaurantPrinter?> GetPrinterConfig(
