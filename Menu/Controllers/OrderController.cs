@@ -2409,6 +2409,7 @@ public class OrderController : ControllerBase
     int orderId,
     [FromQuery] int restaurantId)
     {
+        // 1️⃣ Fetch order
         var order = await _context.Orders
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
@@ -2417,11 +2418,40 @@ public class OrderController : ControllerBase
                 o.RestaurantID == restaurantId);
 
         if (order == null)
+        {
             return NotFound(new { message = "Order not found." });
+        }
+
+        // 2️⃣ BLOCK PRINT IF PAYMENT NOT DONE
+        var isPaid = await _context.Payments.AnyAsync(p =>
+            p.OrderID == orderId &&
+            p.RestaurantID == restaurantId &&
+            p.PaymentStatus == PaymentStatus.Success);
+
+        if (!isPaid)
+        {
+            return BadRequest(new
+            {
+                message = "❌ Payment not completed. Bill cannot be printed."
+            });
+        }
+
+        if (order.ClosedAt != null)
+        {
+            return BadRequest(new
+            {
+                message = "❌ Bill already printed for this order."
+            });
+        }
 
         var printer = await GetPrinterConfig(restaurantId, "BILL");
         if (printer == null)
-            return BadRequest(new { message = "Bill printer not configured." });
+        {
+            return BadRequest(new
+            {
+                message = "Bill printer not configured."
+            });
+        }
 
         var payload = new
         {
@@ -2448,16 +2478,21 @@ public class OrderController : ControllerBase
                 Total = order.TotalAmount
             }
         };
-
         await SavePrintJob(restaurantId, payload);
+
+        order.ClosedAt = DateTime.UtcNow;
+        order.OrderStatus = OrderStatus.Completed;
+
+        await _context.SaveChangesAsync();
 
         return Ok(new
         {
             success = true,
-            message = "Bill print request sent",
+            message = "✅ Bill printed successfully",
             orderNumber = order.OrderNumber
         });
     }
+
 
     private (DateTime startUtc, DateTime endUtc) NormalizeDateRange(DateTime start, DateTime end)
     {
