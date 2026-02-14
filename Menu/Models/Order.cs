@@ -16,7 +16,9 @@ namespace Restaurant_Menu.Models
     public enum OrderSource           // 🌟 NEW
     {
         QR = 0,
-        Waiter = 1
+        Waiter = 1,
+        Takeaway = 2   // ✅ ADD THIS
+
     }
     public enum KitchenStatus
     {
@@ -89,6 +91,11 @@ namespace Restaurant_Menu.Models
 
         // 🔹 Added Missing Payments Collection
         public ICollection<Payment> Payments { get; set; } = new List<Payment>();
+
+        public decimal PaidAmount { get; set; } = 0;
+        public decimal RemainingAmount { get; set; } = 0;
+        public bool OfferLocked { get; set; } = false;
+
 
         public RestaurantTable? RestaurantTable { get; set; }  // <--- THIS
 

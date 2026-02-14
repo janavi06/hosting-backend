@@ -27,8 +27,9 @@ public class ApplicationDbContext : DbContext
     public DbSet<WaiterNotification> WaiterNotifications { get; set; }
     public DbSet<Offer> Offers { get; set; }
 
-   
- 
+    public DbSet<OfferProduct> OfferProducts { get; set; } = null!;
+
+
 
     // NEW: Expense Tracking DbSets
     public DbSet<Expense> Expenses { get; set; }
@@ -131,8 +132,13 @@ public class ApplicationDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-     
 
+    // Add indexes that help lookups
+        modelBuilder.Entity<Offer>()
+            .HasIndex(o => new { o.RestaurantID, o.IsActive });
+
+        modelBuilder.Entity<OfferProduct>()
+            .HasIndex(op => new { op.OfferID, op.ProductID });
         // NEW: EXPENSES
         modelBuilder.Entity<Expense>(entity =>
         {
@@ -523,31 +529,88 @@ modelBuilder.Entity<Category>(entity =>
 
         modelBuilder.Entity<Offer>(entity =>
         {
-            entity.ToTable("Offers"); // Explicitly set the table name
+            entity.ToTable("offers");
+
             entity.HasKey(o => o.OfferID);
 
-            // ✅ CRITICAL: Explicitly map to the correct uppercase column
-            entity.Property(o => o.RestaurantID)
-                .HasColumnName("RestaurantID") // Map to "RestaurantID" not "restaurantid"
-                .IsRequired();
+            entity.Property(o => o.OfferID)
+                  .HasColumnName("offer_id");
 
-            // ✅ Configure the relationship
+            entity.Property(o => o.RestaurantID)
+        .HasColumnName("restaurant_id");   // 🔥 FIXED
+
+            entity.Property(o => o.Name)
+                  .HasColumnName("name");
+
+            entity.Property(o => o.Code)
+                  .HasColumnName("code");
+
+            entity.Property(o => o.Description)
+                  .HasColumnName("description");
+entity.Property(o => o.Scope)
+      .HasColumnName("scope");
+
+entity.Property(o => o.DiscountType)
+      .HasColumnName("discount_type");
+
+
+            entity.Property(o => o.DiscountAmount)
+                  .HasColumnName("discount_amount");
+
+            entity.Property(o => o.DiscountPercent)
+                  .HasColumnName("discount_percent");
+
+            entity.Property(o => o.MinBillAmount)
+                  .HasColumnName("min_bill_amount");
+
+            entity.Property(o => o.Priority)
+                  .HasColumnName("priority");
+
+            entity.Property(o => o.ValidFrom)
+                  .HasColumnName("valid_from")
+                  .HasColumnType("timestamptz");
+
+            entity.Property(o => o.ValidTo)
+                  .HasColumnName("valid_to")
+                  .HasColumnType("timestamptz");
+
+            entity.Property(o => o.IsActive)
+                  .HasColumnName("is_active");
+
+            entity.Property(o => o.AutoApply)
+                  .HasColumnName("auto_apply");
+
             entity.HasOne(o => o.Restaurant)
                   .WithMany()
                   .HasForeignKey(o => o.RestaurantID)
                   .OnDelete(DeleteBehavior.Cascade);
-
-            // Map other properties explicitly
-            entity.Property(o => o.Code).HasColumnName("Code");
-            entity.Property(o => o.Description).HasColumnName("Description").IsRequired();
-            entity.Property(o => o.DiscountAmount).HasColumnName("DiscountAmount");
-            entity.Property(o => o.DiscountPercent).HasColumnName("DiscountPercent");
-            entity.Property(o => o.MinBillAmount).HasColumnName("MinBillAmount").HasDefaultValue(0);
-            entity.Property(o => o.ValidFrom).HasColumnName("ValidFrom");
-            entity.Property(o => o.ValidTo).HasColumnName("ValidTo");
-            entity.Property(o => o.IsActive).HasColumnName("IsActive").HasDefaultValue(true);
-            entity.Property(o => o.AutoApply).HasColumnName("AutoApply").HasDefaultValue(true);
         });
+        modelBuilder.Entity<OfferProduct>(entity =>
+        {
+            entity.ToTable("offer_products");
+
+            entity.HasKey(e => e.OfferProductID);
+
+            entity.Property(e => e.OfferProductID)
+                  .HasColumnName("offer_product_id");
+
+            entity.Property(e => e.OfferID)
+                  .HasColumnName("offer_id");
+
+            entity.Property(e => e.ProductID)
+                  .HasColumnName("product_id");
+
+            entity.HasOne(e => e.Offer)
+                  .WithMany(o => o.OfferProducts)
+                  .HasForeignKey(e => e.OfferID)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.Product)
+                  .WithMany()
+                  .HasForeignKey(e => e.ProductID)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
         // RESTAURANT
         modelBuilder.Entity<Restaurant>(entity =>
         {

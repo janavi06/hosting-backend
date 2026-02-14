@@ -38,6 +38,7 @@ namespace Restaurant_Menu.Models
         public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
 
         public PaymentChannel PaymentChannel { get; set; } = PaymentChannel.Customer;
+        public bool IsPartial { get; set; } = false;
 
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -27,5 +27,6 @@ public interface IOrderRepository
     Task<Order> RemoveItemFromOrderAsync(int orderId, int productId);
 
     Task<Order> UpdateOrderWithoutTrackingAsync(Order order); // ✅ ADD THIS
+    Task<bool> ApplySpecificOfferAsync(Order order, int offerId);
 
 }

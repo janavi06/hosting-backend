@@ -1,32 +1,44 @@
-﻿using System;
+﻿using Restaurant_Menu.Models;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace Restaurant_Menu.Models
+public class Offer
 {
-    public class Offer
-    {
-        [Key]
-        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
-        public int OfferID { get; set; }
+    [Key]
+    [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int OfferID { get; set; }
 
-        public int RestaurantID { get; set; }  // 🔗 Linked to specific restaurant
+    public int RestaurantID { get; set; }
 
-        public string? Code { get; set; }      // Optional promo code
-        public string Description { get; set; } = string.Empty;
+    [Required]
+    public string Name { get; set; } = string.Empty;
 
-        public decimal? DiscountAmount { get; set; }   // Flat ₹
-        public float? DiscountPercent { get; set; }    // % based
+    public string? Code { get; set; }
 
-        public decimal MinBillAmount { get; set; } = 0;   // Condition like ₹2000
+    public string Description { get; set; } = string.Empty;
 
-        public DateTime ValidFrom { get; set; }
-        public DateTime ValidTo { get; set; }
+    // 🔥 CHANGE ENUM TO STRING
+    [Required]
+    public string Scope { get; set; } = "GLOBAL";
 
-        public bool IsActive { get; set; } = true;
-        public bool AutoApply { get; set; } = true;
+    [Required]
+    public string DiscountType { get; set; } = "PERCENT";
 
-        [ForeignKey("RestaurantID")]
-        public Restaurant? Restaurant { get; set; }
-    }
+    public decimal? DiscountAmount { get; set; }
+    public decimal? DiscountPercent { get; set; }
+
+    public decimal MinBillAmount { get; set; } = 0;
+
+    public int Priority { get; set; } = 0;
+
+    public DateTime ValidFrom { get; set; }
+    public DateTime ValidTo { get; set; }
+
+    public bool IsActive { get; set; } = true;
+    public bool AutoApply { get; set; } = true;
+
+    public ICollection<OfferProduct> OfferProducts { get; set; } = new List<OfferProduct>();
+
+    [ForeignKey(nameof(RestaurantID))]
+    public Restaurant? Restaurant { get; set; }
 }

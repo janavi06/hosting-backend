@@ -1,4 +1,6 @@
 ﻿using Restaurant_Menu.Models;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Restaurant_Menu.Interface
 {
@@ -9,7 +11,12 @@ namespace Restaurant_Menu.Interface
         Task<Offer?> GetOfferByIdAsync(int id);
         Task<bool> DeleteOfferAsync(int id);
 
-        // Add these new methods
+        /// <summary>
+        /// Return offers that are applicable for a restaurant given a bill amount and list of product IDs.
+        /// Only returns offers that are currently active + autoApply == true.
+        /// </summary>
+        Task<List<Offer>> GetApplicableOffersAsync(int restaurantId, decimal billAmount, List<int> productIds);
+
         Task<object> GetOfferStatsAsync(int restaurantId);
         Task<object> GetOfferPerformanceAsync(int restaurantId);
     }

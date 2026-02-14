@@ -1,219 +1,164 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using Restaurant_Menu.Models;
-using Restaurant_Menu.Interface;
 using Microsoft.EntityFrameworkCore;
+using Restaurant_Menu.Interface;
+using Restaurant_Menu.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
-[ApiController]
-[Route("api/[controller]")]
-public class OfferController : ControllerBase
+namespace Restaurant_Menu.Controllers
 {
-    private readonly IOfferRepository _repo;
-    private readonly ApplicationDbContext _context; // Add this
-
-    public OfferController(IOfferRepository repo, ApplicationDbContext context) // Add context to constructor
+    [ApiController]
+    [Route("api/[controller]")]
+    public class OfferController : ControllerBase
     {
-        _repo = repo;
-        _context = context;
-    }
+        private readonly IOfferRepository _repo;
+        private readonly ApplicationDbContext _context;
 
-    // In OfferController.cs - Update the AddOffer method
-    [HttpPost]
-    public async Task<IActionResult> AddOffer([FromQuery] int restaurantId, [FromBody] Offer offer)
-    {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
-
-        // ✅ CRITICAL FIX: Set the RestaurantID from the query parameter
-        offer.RestaurantID = restaurantId;
-
-        if (offer.RestaurantID <= 0)
-            return BadRequest("RestaurantID is required.");
-
-        // Validate restaurant exists
-        var restaurantExists = await _context.Restaurants.AnyAsync(r => r.RestaurantID == restaurantId);
-        if (!restaurantExists)
-            return BadRequest("Invalid restaurant ID");
-
-        if (offer.ValidFrom >= offer.ValidTo)
-            return BadRequest("ValidFrom must be before ValidTo");
-
-        if (!offer.DiscountAmount.HasValue && !offer.DiscountPercent.HasValue)
-            return BadRequest("Either discount amount or percent must be specified");
-
-        try
+        public OfferController(IOfferRepository repo, ApplicationDbContext context)
         {
-            var created = await _repo.AddOfferAsync(offer);
-            return Ok(new
-            {
-                message = "Offer created successfully",
-                offer = created
-            });
+            _repo = repo;
+            _context = context;
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, $"Internal server error: {ex.Message}");
-        }
-    }
-    // 🔹 POST: api/offer/bulk?restaurantId=5
-    [HttpPost("bulk")]
-    public async Task<IActionResult> AddBulkOffers([FromQuery] int restaurantId, [FromBody] List<Offer> offers)
-    {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
 
-        // Validate restaurant exists
-        var restaurantExists = await _context.Restaurants.AnyAsync(r => r.RestaurantID == restaurantId);
-        if (!restaurantExists)
-            return BadRequest("Invalid RestaurantID");
-
-        // Set RestaurantID for all offers
-        foreach (var offer in offers)
+        [HttpPost]
+        public async Task<IActionResult> AddOffer(
+            [FromQuery] int restaurantId,
+            [FromBody] Offer offer,
+            [FromQuery] List<int>? productIds)
         {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId is required");
+
+            var exists = await _context.Restaurants
+                .AnyAsync(r => r.RestaurantID == restaurantId);
+
+            if (!exists)
+                return BadRequest("Invalid restaurantId");
+
             offer.RestaurantID = restaurantId;
-        }
 
-        try
-        {
-            var createdOffers = new List<Offer>();
-            foreach (var offer in offers)
+            if (offer.ValidFrom >= offer.ValidTo)
+                return BadRequest("ValidFrom must be before ValidTo");
+
+            // ================= STRICT DISCOUNT VALIDATION =================
+
+            if (offer.DiscountType == "PERCENT")
             {
-                if (offer.ValidFrom >= offer.ValidTo)
-                    return BadRequest($"ValidFrom must be before ValidTo for offer: {offer.Description}");
+                if (!offer.DiscountPercent.HasValue || offer.DiscountPercent <= 0)
+                    return BadRequest("Valid DiscountPercent required");
 
-                if (!offer.DiscountAmount.HasValue && !offer.DiscountPercent.HasValue)
-                    return BadRequest($"Either discount amount or percent must be specified for offer: {offer.Description}");
+                offer.DiscountAmount = null;
+            }
+            else if (offer.DiscountType == "AMOUNT")
+            {
+                if (!offer.DiscountAmount.HasValue || offer.DiscountAmount <= 0)
+                    return BadRequest("Valid DiscountAmount required");
 
-                var created = await _repo.AddOfferAsync(offer);
-                createdOffers.Add(created);
+                offer.DiscountPercent = null;
+            }
+            else
+            {
+                return BadRequest("Invalid DiscountType");
+            }
+
+            // ================= SCOPE VALIDATION =================
+
+            if (offer.Scope == "MIN_BILL" && offer.MinBillAmount <= 0)
+                return BadRequest("MinBillAmount must be greater than 0");
+
+            if (offer.Scope == "PRODUCT_BASED" &&
+                (productIds == null || !productIds.Any()))
+                return BadRequest("ProductIds required for PRODUCT_BASED offer");
+
+            _context.Offers.Add(offer);
+            await _context.SaveChangesAsync();
+
+            // Insert OfferProducts
+            if (productIds != null && productIds.Any())
+            {
+                foreach (var pid in productIds)
+                {
+                    _context.OfferProducts.Add(new OfferProduct
+                    {
+                        OfferID = offer.OfferID,
+                        ProductID = pid
+                    });
+                }
+
+                await _context.SaveChangesAsync();
             }
 
             return Ok(new
             {
-                message = $"Successfully created {createdOffers.Count} offers",
-                offers = createdOffers
+                message = "Offer created successfully",
+                offer
             });
         }
-        catch (DbUpdateException dbEx)
+
+        [HttpGet("restaurant/{restaurantId}")]
+        public async Task<IActionResult> GetOffers(int restaurantId)
         {
-            return StatusCode(500, $"Database error: {dbEx.InnerException?.Message ?? dbEx.Message}");
+            if (restaurantId <= 0)
+                return BadRequest("Invalid restaurantId");
+
+            var offers = await _repo.GetActiveOffersAsync(restaurantId);
+            return Ok(offers);
         }
-        catch (Exception ex)
+
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> Delete(int id, [FromQuery] int restaurantId)
         {
-            return StatusCode(500, $"Internal server error: {ex.Message}");
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId is required");
+
+            var offer = await _repo.GetOfferByIdAsync(id);
+            if (offer == null || offer.RestaurantID != restaurantId)
+                return NotFound("Offer not found");
+
+            var deleted = await _repo.DeleteOfferAsync(id);
+            if (!deleted)
+                return StatusCode(500, "Failed to delete offer");
+
+            return Ok(new { message = "Offer deleted successfully" });
         }
-    }
 
-    // GET: api/offer/stats?restaurantId=5
-    [HttpGet("stats")]
-    public async Task<IActionResult> GetOfferStats([FromQuery] int restaurantId)
-    {
-        if (restaurantId <= 0)
-            return BadRequest("Invalid RestaurantID");
-
-        var stats = await _repo.GetOfferStatsAsync(restaurantId);
-        return Ok(stats);
-    }
-
-    // GET: api/offer/performance?restaurantId=5
-    [HttpGet("performance")]
-    public async Task<IActionResult> GetOfferPerformance([FromQuery] int restaurantId)
-    {
-        if (restaurantId <= 0)
-            return BadRequest("Invalid RestaurantID");
-
-        var performance = await _repo.GetOfferPerformanceAsync(restaurantId);
-        return Ok(performance);
-    }
-
-    // 🔹 GET: api/offer/restaurant/5
-    [HttpGet("restaurant/{restaurantId}")]
-    public async Task<IActionResult> GetOffers(int restaurantId)
-    {
-        if (restaurantId <= 0)
-            return BadRequest("Invalid RestaurantID");
-
-        var offers = await _repo.GetActiveOffersAsync(restaurantId);
-        return Ok(offers);
-    }
-
-    // 🔹 GET: api/offer/10?restaurantId=5
-    [HttpGet("{id}")]
-    public async Task<IActionResult> GetById(int id, [FromQuery] int restaurantId)
-    {
-        if (restaurantId <= 0)
-            return BadRequest("RestaurantID is required.");
-
-        var offer = await _repo.GetOfferByIdAsync(id);
-        if (offer == null || offer.RestaurantID != restaurantId)
-            return NotFound("Offer not found for this restaurant");
-
-        return Ok(offer);
-    }
-
-    // 🔹 DELETE: api/offer/10?restaurantId=5
-    [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(int id, [FromQuery] int restaurantId)
-    {
-        if (restaurantId <= 0)
-            return BadRequest("Invalid RestaurantID");
-
-        var offer = await _repo.GetOfferByIdAsync(id);
-        if (offer == null || offer.RestaurantID != restaurantId)
-            return NotFound("Offer not found or doesn't belong to the specified restaurant");
-
-        var result = await _repo.DeleteOfferAsync(id);
-        return result ? Ok(new { message = "Offer deleted successfully" }) : StatusCode(500, "Failed to delete the offer");
-    }
-
-    // 🔹 PUT: api/offer/10?restaurantId=5
-    [HttpPut("{id}")]
-    public async Task<IActionResult> UpdateOffer(int id, [FromQuery] int restaurantId, [FromBody] Offer updatedOffer)
-    {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
-
-        if (restaurantId <= 0)
-            return BadRequest("Invalid RestaurantID");
-
-        var existingOffer = await _repo.GetOfferByIdAsync(id);
-        if (existingOffer == null || existingOffer.RestaurantID != restaurantId)
-            return NotFound("Offer not found for this restaurant");
-
-        // Update properties
-        existingOffer.Code = updatedOffer.Code;
-        existingOffer.Description = updatedOffer.Description;
-        existingOffer.DiscountAmount = updatedOffer.DiscountAmount;
-        existingOffer.DiscountPercent = updatedOffer.DiscountPercent;
-        existingOffer.MinBillAmount = updatedOffer.MinBillAmount;
-        existingOffer.ValidFrom = updatedOffer.ValidFrom;
-        existingOffer.ValidTo = updatedOffer.ValidTo;
-        existingOffer.IsActive = updatedOffer.IsActive;
-        existingOffer.AutoApply = updatedOffer.AutoApply;
-
-        if (existingOffer.ValidFrom >= existingOffer.ValidTo)
-            return BadRequest("ValidFrom must be before ValidTo");
-
-        if (!existingOffer.DiscountAmount.HasValue && !existingOffer.DiscountPercent.HasValue)
-            return BadRequest("Either discount amount or percent must be specified");
-
-        try
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateOffer(
+            int id,
+            [FromQuery] int restaurantId,
+            [FromBody] Offer updatedOffer)
         {
-            _context.Offers.Update(existingOffer);
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var existing = await _repo.GetOfferByIdAsync(id);
+
+            if (existing == null || existing.RestaurantID != restaurantId)
+                return NotFound("Offer not found");
+
+            if (updatedOffer.ValidFrom >= updatedOffer.ValidTo)
+                return BadRequest("ValidFrom must be before ValidTo");
+
+            existing.Name = updatedOffer.Name;
+            existing.Description = updatedOffer.Description;
+            existing.Code = updatedOffer.Code;
+            existing.Scope = updatedOffer.Scope;
+            existing.DiscountType = updatedOffer.DiscountType;
+            existing.DiscountAmount = updatedOffer.DiscountAmount;
+            existing.DiscountPercent = updatedOffer.DiscountPercent;
+            existing.MinBillAmount = updatedOffer.MinBillAmount;
+            existing.ValidFrom = updatedOffer.ValidFrom;
+            existing.ValidTo = updatedOffer.ValidTo;
+            existing.IsActive = updatedOffer.IsActive;
+            existing.AutoApply = updatedOffer.AutoApply;
+            existing.Priority = updatedOffer.Priority;
+
+            _context.Offers.Update(existing);
             await _context.SaveChangesAsync();
 
-            // Invalidate cache
-            var cacheKey = $"offers_{restaurantId}";
-            // You'll need to inject IMemoryCache or modify your repository to handle cache invalidation
-
-            return Ok(new { message = "Offer updated successfully", offer = existingOffer });
-        }
-        catch (DbUpdateException dbEx)
-        {
-            return StatusCode(500, $"Database error: {dbEx.InnerException?.Message ?? dbEx.Message}");
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, $"Internal server error: {ex.Message}");
+            return Ok(new { message = "Offer updated", offer = existing });
         }
     }
 }

@@ -96,29 +96,32 @@ public class OrderRepository : IOrderRepository
         {
             order.Subtotal = 0m;
             order.TotalAmount = 0m;
+            order.DiscountAmount = 0m;
+            order.AppliedOfferID = null;
             return;
         }
 
-        decimal subtotal = 0m;
+        // 1️⃣ Subtotal
+        order.Subtotal = order.OrderItems.Sum(i => i.UnitPrice * i.Quantity);
 
-        foreach (var item in order.OrderItems)
-        {
-            subtotal += item.UnitPrice * item.Quantity;
-        }
+        // 2️⃣ Apply discount (Round discount to 2 decimals)
+        var discountedAmount = Math.Max(0, order.Subtotal - Math.Round(order.DiscountAmount, 2));
 
-        order.Subtotal = subtotal;
+        // 3️⃣ Calculate percentage based taxes
+        var cgstAmount = discountedAmount * (order.CGST / 100m);
+        var sgstAmount = discountedAmount * (order.SGST / 100m);
+        var serviceChargeAmount = discountedAmount * (order.ServiceCharge / 100m);
 
-        // ✅ These are already non-null decimals — no ??= needed
-        order.TotalAmount =
-            order.Subtotal
-            + order.CGST
-            + order.SGST
-            + order.ServiceCharge
-            - order.DiscountAmount;
+        // 4️⃣ Final total: Round to 0 decimals for whole numbers (recommended for Cash/UPI)
+        // or round to 2 decimals if you strictly accept paise. 
+        // Rounding to 0 makes it ₹319 instead of ₹318.60.
+        order.TotalAmount = Math.Round(
+            discountedAmount +
+            cgstAmount +
+            sgstAmount +
+            serviceChargeAmount,
+            0); // Change to 2 if you want to keep decimals
     }
-
-
-
 
     // ✅ Get order by ID
     public async Task<Order?> GetOrderByIdAsync(int orderId, int restaurantId)
@@ -141,76 +144,101 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
     // ✅ Add new order - UPDATED VERSION
     public async Task<Order> AddOrderAsync(Order order)
     {
-        // Set audit and default values.
         order.CreatedAt = DateTime.UtcNow;
         order.UpdatedAt = DateTime.UtcNow;
         order.CreatedBy ??= "System";
         order.UpdatedBy ??= "System";
+
         order.CGST = 0;
         order.SGST = 0;
         order.ServiceCharge = 0;
         order.OrderStatus = OrderStatus.Pending;
         order.KitchenStatus = KitchenStatus.Pending;
 
-        // ✅ NEW: If OrderNumber is not set, get the next one for the restaurant
         if (order.OrderNumber == 0)
-        {
             order.OrderNumber = await GetNextOrderNumberAsync(order.RestaurantID);
-        }
 
-        // ✅ FIX: Handle customizations properly - don't create new CustomizationOption entities
-        foreach (var item in order.OrderItems)
-        {
-            item.RestaurantID = order.RestaurantID;
+        // 🔥 STEP 1 — REMOVE OFFER BEFORE INSERT
+        order.AppliedOfferID = null;
+        order.DiscountAmount = 0;
 
-            // ✅ FIX: Ensure we're only setting IDs for existing customization options
-            if (item.Customizations != null && item.Customizations.Any())
-            {
-                var validCustomizations = new List<OrderItemCustomization>();
-
-                foreach (var customization in item.Customizations)
-                {
-                    // ✅ Check if the customization option exists
-                    var existingOption = await _context.CustomizationOptions
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(co => co.CustomizationOptionID == customization.CustomizationOptionID);
-
-                    if (existingOption != null)
-                    {
-                        // ✅ Only add the relationship, don't create new CustomizationOption
-                        validCustomizations.Add(new OrderItemCustomization
-                        {
-                            CustomizationOptionID = customization.CustomizationOptionID,
-                            RestaurantID = order.RestaurantID
-                            // ✅ Don't set the navigation property to avoid tracking issues
-                        });
-                    }
-                }
-
-                // ✅ Replace with valid customizations
-                item.Customizations = validCustomizations;
-            }
-        }
-
-        // First add and save the order → ensures OrderID is generated
         _context.Orders.Add(order);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync(); // OrderID generated safely
 
-        // Adjust inventory for all order items (recipe-based deduction)
+        // 🔥 STEP 2 — Apply offer AFTER insert
+        if (!order.OfferLocked && order.AppliedOfferID == null)
+        {
+            await ApplyBestAvailableOfferAsync(order);
+            CalculateOrderAmounts(order);
+            await _context.SaveChangesAsync();
+        }
+
+        // 🔥 STEP 3 — Inventory adjustment
         foreach (var item in order.OrderItems)
         {
-            await AdjustInventoryForProductAsync(order.RestaurantID, item.ProductID, order.OrderID, item.Quantity, order.CreatedBy ?? "System");
+            await AdjustInventoryForProductAsync(
+                order.RestaurantID,
+                item.ProductID,
+                order.OrderID,
+                item.Quantity,
+                order.CreatedBy ?? "System");
         }
-        await _context.SaveChangesAsync();
 
-        // Now calculate totals and apply offers
-        CalculateOrderAmounts(order);
-
-        // Save again for totals and applied offer
         await _context.SaveChangesAsync();
 
         return order;
     }
+    public async Task<bool> ApplySpecificOfferAsync(Order order, int offerId)
+    {
+        var offer = await _context.Offers
+            .Include(o => o.OfferProducts)
+            .FirstOrDefaultAsync(o =>
+                o.OfferID == offerId &&
+                o.RestaurantID == order.RestaurantID &&
+                o.IsActive &&
+                o.ValidFrom <= DateTime.UtcNow &&
+                o.ValidTo >= DateTime.UtcNow);
+
+        if (offer == null)
+            return false;
+
+        bool applicable = ValidateOfferForOrder(order, offer);
+
+        if (!applicable)
+            return false;
+
+        order.AppliedOfferID = offer.OfferID;
+
+        if (offer.DiscountType == "PERCENT")
+        {
+            order.DiscountAmount = order.Subtotal *
+                                   (offer.DiscountPercent.Value / 100m);
+        }
+        else
+        {
+            order.DiscountAmount = offer.DiscountAmount.Value;
+        }
+
+        return true;
+    }
+    private bool ValidateOfferForOrder(Order order, Offer offer)
+    {
+        if (offer.Scope == "MIN_BILL")
+        {
+            return order.Subtotal >= offer.MinBillAmount;
+        }
+
+        if (offer.Scope == "PRODUCT_BASED")
+        {
+            var productIds = offer.OfferProducts.Select(op => op.ProductID);
+
+            return order.OrderItems.Any(i =>
+                productIds.Contains(i.ProductID));
+        }
+
+        return true;
+    }
+
 
     public async Task<Order?> GetOrderByIdWithItemsAsync(int orderId, int restaurantId)
     {
@@ -481,7 +509,16 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
 
         // ✅ Recalculate offers and totals
         CalculateOrderAmounts(order);
+
+        if (!order.OfferLocked && order.OrderStatus == OrderStatus.Pending)
+        {
+            await ApplyBestAvailableOfferAsync(order);
+            CalculateOrderAmounts(order);
+        }
+
+
         await _context.SaveChangesAsync();
+
 
         return order;
     }
@@ -547,6 +584,13 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
 
             CalculateOrderAmounts(order);
 
+            if (!order.OfferLocked && order.OrderStatus == OrderStatus.Pending)
+            {
+                await ApplyBestAvailableOfferAsync(order);
+                CalculateOrderAmounts(order);
+            }
+
+
 
             await _context.SaveChangesAsync();
         }
@@ -555,46 +599,117 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
     }
     public async Task ApplyBestAvailableOfferAsync(Order order)
     {
+        if (order == null)
+            return;
+
+        // 🔒 Offer should only be dynamic in Pending state
+        if (order.OfferLocked || order.OrderStatus != OrderStatus.Pending)
+            return;
+
+
+        // If no items, reset everything safely
+        if (order.OrderItems == null || !order.OrderItems.Any())
+        {
+            order.DiscountAmount = 0;
+            order.AppliedOfferID = null;
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+
         var offers = await _context.Offers
-            .Where(o => o.IsActive && o.ValidFrom <= DateTime.UtcNow && o.ValidTo >= DateTime.UtcNow)
+            .Include(o => o.OfferProducts)
+            .Where(o =>
+                o.RestaurantID == order.RestaurantID &&   // 🔐 restaurant safety
+                o.IsActive &&
+                o.ValidFrom <= now &&
+                o.ValidTo >= now)
+            .OrderByDescending(o => o.Priority)
             .ToListAsync();
 
-        Offer bestOffer = null;
-        decimal maxDiscount = 0;
+        decimal bestDiscount = 0m;
+        Offer? bestOffer = null;
 
         foreach (var offer in offers)
         {
-            decimal discount = 0;
-            if (offer.DiscountPercent.HasValue)
+            decimal discount = 0m;
+
+            // GLOBAL
+            if (offer.Scope.Equals("GLOBAL", StringComparison.OrdinalIgnoreCase))
             {
-                discount = order.Subtotal * ((decimal)offer.DiscountPercent.Value / 100m);
-            }
-            else if (offer.DiscountAmount.HasValue)
-            {
-                discount = offer.DiscountAmount.Value;
+                discount = CalculateDiscount(order.Subtotal, offer);
             }
 
-            if (discount > maxDiscount)
+            // MIN BILL
+            else if (offer.Scope.Equals("MIN_BILL", StringComparison.OrdinalIgnoreCase)
+                     && order.Subtotal >= offer.MinBillAmount)
             {
-                maxDiscount = discount;
+                discount = CalculateDiscount(order.Subtotal, offer);
+            }
+
+            // PRODUCT BASED
+            else if (offer.Scope.Equals("PRODUCT_BASED", StringComparison.OrdinalIgnoreCase))
+            {
+                var productIds = offer.OfferProducts
+                    .Select(p => p.ProductID)
+                    .ToList();
+
+                var applicableAmount = order.OrderItems
+                    .Where(i => productIds.Contains(i.ProductID))
+                    .Sum(i => i.UnitPrice * i.Quantity);
+
+                discount = CalculateDiscount(applicableAmount, offer);
+            }
+
+            if (discount > bestDiscount)
+            {
+                bestDiscount = discount;
                 bestOffer = offer;
             }
         }
 
+        // 🔥 SAFETY CHECK BEFORE ASSIGNING FK
         if (bestOffer != null)
         {
-            order.AppliedOffer = bestOffer;
-            order.DiscountAmount = maxDiscount;
+            var offerExists = await _context.Offers
+                .AnyAsync(o =>
+                    o.OfferID == bestOffer.OfferID &&
+                    o.RestaurantID == order.RestaurantID);
+
+            if (offerExists)
+            {
+                order.DiscountAmount = Math.Round(bestDiscount, 2);
+                order.AppliedOfferID = bestOffer.OfferID;
+            }
+            else
+            {
+                order.DiscountAmount = 0;
+                order.AppliedOfferID = null;
+            }
         }
         else
         {
-            order.AppliedOffer = null;
             order.DiscountAmount = 0;
+            order.AppliedOfferID = null;
         }
-
-        // Total recalculation handled by CalculateOrderAmounts
     }
 
+
+
+    private decimal CalculateDiscount(decimal baseAmount, Offer offer)
+    {
+        if (offer.DiscountType.Equals("PERCENT", StringComparison.OrdinalIgnoreCase))
+        {
+            return baseAmount * (offer.DiscountPercent ?? 0) / 100m;
+        }
+
+        if (offer.DiscountType.Equals("AMOUNT", StringComparison.OrdinalIgnoreCase))
+        {
+            return offer.DiscountAmount ?? 0m;
+        }
+
+        return 0m;
+    }
 
 
     public async Task CreateKitchenNotificationAsync(int orderId, int tableNo)

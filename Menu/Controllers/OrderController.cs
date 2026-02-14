@@ -79,13 +79,125 @@ public class OrderController : ControllerBase
     }
 
 
+    //[HttpPost("generate")]
+    //public async Task<ActionResult> GenerateOrder(
+    //    [FromQuery] int restaurantId,
+    //    [FromQuery] int? tableNo = null,
+    //    [FromQuery] string source = "QR",
+    //    [FromQuery] string paymentPreference = "PayLater",
+    //    [FromBody] Order? orderData = null)
+    //{
+    //    if (restaurantId <= 0)
+    //        return BadRequest("restaurantId is required");
+
+    //    if (!await _context.Restaurants.AnyAsync(r => r.RestaurantID == restaurantId))
+    //        return BadRequest("Unknown restaurantId");
+
+    //    if (orderData == null)
+    //        orderData = new Order();
+
+    //    if (orderData.UserID <= 0)
+    //    {
+    //        var anon = new User
+    //        {
+    //            UserRole = "customer",
+    //            UserName = "Guest",
+    //            CreatedAt = DateTime.UtcNow,
+    //            UpdatedAt = DateTime.UtcNow,
+    //            CreatedBy = "System",
+    //            UpdatedBy = "System",
+    //            IsAvailable = true,
+    //            RestaurantID = restaurantId
+    //        };
+    //        _context.Users.Add(anon);
+    //        await _context.SaveChangesAsync();
+    //        orderData.UserID = anon.UserID;
+    //    }
+
+    //    int? restaurantTableId = null;
+    //    if (tableNo.HasValue)
+    //    {
+    //        var table = await _context.RestaurantTables
+    //            .FirstOrDefaultAsync(t => t.RestaurantTableID == tableNo && t.RestaurantID == restaurantId);
+
+    //        if (table == null)
+    //            return BadRequest("Table does not belong to this restaurant");
+
+    //        restaurantTableId = table.RestaurantTableID;
+    //    }
+
+    //    var order = new Order
+    //    {
+    //        UserID = orderData.UserID,
+    //        RestaurantID = restaurantId,
+    //        RestaurantTableID = restaurantTableId,
+    //        CreatedAt = DateTime.UtcNow,
+    //        UpdatedAt = DateTime.UtcNow,
+    //        CreatedBy = orderData.UserID.ToString(),
+    //        UpdatedBy = orderData.UserID.ToString(),
+    //        OrderStatus = OrderStatus.Pending,
+    //        KitchenStatus = KitchenStatus.Pending,
+    //        Source = source.Equals("waiter", StringComparison.OrdinalIgnoreCase)
+    //            ? OrderSource.Waiter
+    //            : OrderSource.QR,
+    //        OrderNumber = await GetNextOrderNumberAsync(restaurantId),
+    //        OrderItems = new List<OrderItem>()
+    //    };
+
+    //    if (orderData.OrderItems != null)
+    //    {
+    //        foreach (var inc in orderData.OrderItems)
+    //        {
+    //            var unitPrice = await CalculateUnitPriceAsync(
+    //                inc.ProductID,
+    //                inc.CustomizationOptionIds,
+    //                restaurantId);
+
+    //            order.OrderItems.Add(new OrderItem
+    //            {
+    //                ProductID = inc.ProductID,
+    //                Quantity = inc.Quantity,
+    //                UnitPrice = unitPrice,
+    //                BatchID = 1,
+    //                RestaurantID = restaurantId,
+    //                IsPrepared = false,
+    //                AddedToKitchenAt = DateTime.UtcNow,
+    //                Customizations = inc.CustomizationOptionIds?
+    //                    .Select(id => new OrderItemCustomization
+    //                    {
+    //                        CustomizationOptionID = id,
+    //                        RestaurantID = restaurantId
+    //                    }).ToList() ?? new()
+    //            });
+    //        }
+    //    }
+
+    //    _orderRepository.CalculateOrderAmounts(order);
+
+    //    if (!order.OfferLocked && order.AppliedOfferID == null)
+    //    {
+    //        await _orderRepository.ApplyBestAvailableOfferAsync(order);
+    //        _orderRepository.CalculateOrderAmounts(order);
+    //    }
+
+    //    await _orderRepository.AddOrderAsync(order);
+
+
+    //    return Ok(new
+    //    {
+    //        message = "Order created successfully",
+    //        orderID = order.OrderID,
+    //        orderNumber = order.OrderNumber,
+    //        totalAmount = order.TotalAmount
+    //    });
+    //}
     [HttpPost("generate")]
     public async Task<ActionResult> GenerateOrder(
-        [FromQuery] int restaurantId,
-        [FromQuery] int? tableNo = null,
-        [FromQuery] string source = "QR",
-        [FromQuery] string paymentPreference = "PayLater",
-        [FromBody] Order? orderData = null)
+    [FromQuery] int restaurantId,
+    [FromQuery] int? tableNo = null,
+    [FromQuery] string source = "QR",
+    [FromQuery] string paymentPreference = "PayLater",
+    [FromBody] Order? orderData = null)
     {
         if (restaurantId <= 0)
             return BadRequest("restaurantId is required");
@@ -96,6 +208,15 @@ public class OrderController : ControllerBase
         if (orderData == null)
             orderData = new Order();
 
+        // Parse source properly
+        OrderSource parsedSource = source.ToLower() switch
+        {
+            "waiter" => OrderSource.Waiter,
+            "takeaway" => OrderSource.Takeaway,
+            _ => OrderSource.QR
+        };
+
+        // Create anonymous user if not provided
         if (orderData.UserID <= 0)
         {
             var anon = new User
@@ -109,16 +230,21 @@ public class OrderController : ControllerBase
                 IsAvailable = true,
                 RestaurantID = restaurantId
             };
+
             _context.Users.Add(anon);
             await _context.SaveChangesAsync();
             orderData.UserID = anon.UserID;
         }
 
         int? restaurantTableId = null;
-        if (tableNo.HasValue)
+
+        // Table required only if NOT takeaway
+        if (parsedSource != OrderSource.Takeaway && tableNo.HasValue)
         {
             var table = await _context.RestaurantTables
-                .FirstOrDefaultAsync(t => t.RestaurantTableID == tableNo && t.RestaurantID == restaurantId);
+                .FirstOrDefaultAsync(t =>
+                    t.RestaurantTableID == tableNo &&
+                    t.RestaurantID == restaurantId);
 
             if (table == null)
                 return BadRequest("Table does not belong to this restaurant");
@@ -137,9 +263,7 @@ public class OrderController : ControllerBase
             UpdatedBy = orderData.UserID.ToString(),
             OrderStatus = OrderStatus.Pending,
             KitchenStatus = KitchenStatus.Pending,
-            Source = source.Equals("waiter", StringComparison.OrdinalIgnoreCase)
-                ? OrderSource.Waiter
-                : OrderSource.QR,
+            Source = parsedSource,
             OrderNumber = await GetNextOrderNumberAsync(restaurantId),
             OrderItems = new List<OrderItem>()
         };
@@ -174,6 +298,12 @@ public class OrderController : ControllerBase
 
         _orderRepository.CalculateOrderAmounts(order);
 
+        if (!order.OfferLocked && order.AppliedOfferID == null)
+        {
+            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            _orderRepository.CalculateOrderAmounts(order);
+        }
+
         await _orderRepository.AddOrderAsync(order);
 
         return Ok(new
@@ -181,6 +311,7 @@ public class OrderController : ControllerBase
             message = "Order created successfully",
             orderID = order.OrderID,
             orderNumber = order.OrderNumber,
+            orderType = order.Source.ToString(),
             totalAmount = order.TotalAmount
         });
     }
@@ -230,7 +361,11 @@ public class OrderController : ControllerBase
 
             order.KitchenStatus = KitchenStatus.Pending;
             _orderRepository.CalculateOrderAmounts(order);
-            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            if (!order.OfferLocked && order.AppliedOfferID == null)
+            {
+                await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            }
+            _orderRepository.CalculateOrderAmounts(order);
 
             await _context.SaveChangesAsync();
             await transaction.CommitAsync();
@@ -322,6 +457,10 @@ public class OrderController : ControllerBase
             return NotFound();
 
         _orderRepository.CalculateOrderAmounts(order);
+        if (!order.OfferLocked && order.AppliedOfferID == null)
+        {
+            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+        }
 
         return Ok(new
         {
@@ -358,35 +497,66 @@ public class OrderController : ControllerBase
         return Ok(orders);
     }
 
-
     [HttpPost("{orderId}/confirm")]
-    public async Task<IActionResult> ConfirmOrder(int orderId, [FromQuery] int restaurantId)
+    public async Task<IActionResult> ConfirmOrder(
+        int orderId,
+        [FromQuery] int restaurantId)
     {
-        var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
+        if (restaurantId <= 0)
+            return BadRequest("restaurantId is required.");
+
+        // Validate restaurant exists
+        var restaurantExists = await _context.Restaurants
+            .AnyAsync(r => r.RestaurantID == restaurantId);
+
+        if (!restaurantExists)
+            return BadRequest("Invalid restaurantId.");
+
+        var order = await _orderRepository
+            .GetOrderByIdWithItemsAsync(orderId, restaurantId);
+
         if (order == null)
-            return NotFound();
+            return NotFound("Order not found.");
 
         if (order.OrderStatus != OrderStatus.Pending)
-            return BadRequest("Order already processed");
+            return BadRequest("Order already processed.");
 
         await using var tx = await _context.Database.BeginTransactionAsync();
 
         try
         {
+            // 🔹 STEP 1: Recalculate totals (very important)
+            _orderRepository.CalculateOrderAmounts(order);
+
+            if (order.AppliedOfferID == null || order.AppliedOfferID == 0)
+            {
+                await _orderRepository.ApplyBestAvailableOfferAsync(order);
+                _orderRepository.CalculateOrderAmounts(order);
+            }
+
+            order.OfferLocked = true;
+
+
+            // 🔹 STEP 3: Deduct inventory
             await _inventoryRepository.DeductInventoryForOrderAsync(
                 order,
                 $"ORDER-{order.OrderNumber}",
-                order.UpdatedBy
+                order.UpdatedBy ?? "System"
             );
 
+            // 🔹 STEP 4: Update order status
             order.OrderStatus = OrderStatus.Confirmed;
             order.KitchenStatus = KitchenStatus.Pending;
             order.UpdatedAt = DateTime.UtcNow;
+            order.UpdatedBy ??= "System";
 
             await _context.SaveChangesAsync();
+
             await tx.CommitAsync();
 
+            // 🔹 STEP 5: Send KOT print AFTER commit
             var printer = await GetPrinterConfig(restaurantId, "KOT");
+
             if (printer != null)
             {
                 var payload = new
@@ -395,7 +565,7 @@ public class OrderController : ControllerBase
                     PrinterName = printer.PrinterName,
                     RestaurantName = printer.HeaderText,
                     RestaurantAddress = printer.Address,
-                    Footer = "",  
+                    Footer = printer.FooterText ?? "",
 
                     Order = new
                     {
@@ -403,11 +573,11 @@ public class OrderController : ControllerBase
                         TableNo = order.RestaurantTableID?.ToString() ?? "0",
                         Items = order.OrderItems.Select(i => new
                         {
-                            Name = i.Product?.ProductName,
+                            Name = i.Product?.ProductName ?? "Item",
                             Qty = i.Quantity,
                             Modifiers = i.Customizations
                                 .Select(c => c.CustomizationOption?.Name)
-                                .Where(x => x != null)
+                                .Where(x => !string.IsNullOrEmpty(x))
                                 .ToList()
                         }).ToList()
                     }
@@ -418,17 +588,24 @@ public class OrderController : ControllerBase
 
             return Ok(new
             {
-                message = "Order confirmed & KOT printed",
-                orderNumber = order.OrderNumber
+                message = "Order confirmed successfully",
+                orderID = order.OrderID,
+                orderNumber = order.OrderNumber,
+                totalAmount = order.TotalAmount,
+                status = order.OrderStatus.ToString()
             });
         }
         catch (Exception ex)
         {
             await tx.RollbackAsync();
-            _logger.LogError(ex, "ConfirmOrder failed");
-            return StatusCode(500, "Failed to confirm order");
+
+            _logger.LogError(ex,
+                $"ConfirmOrder failed for OrderID {orderId}, RestaurantID {restaurantId}");
+
+            return StatusCode(500, "Failed to confirm order.");
         }
     }
+
 
     [HttpGet("kitchen/pending-orders")]
     public async Task<IActionResult> GetPendingKitchenOrders([FromQuery] int restaurantId)
@@ -439,7 +616,7 @@ public class OrderController : ControllerBase
             .Include(oi => oi.Customizations).ThenInclude(c => c.CustomizationOption)
             .Where(oi =>
                 oi.Order.OrderStatus == OrderStatus.Confirmed &&
-                oi.Order.RestaurantID == restaurantId && 
+                oi.Order.RestaurantID == restaurantId &&
                 oi.Product != null && oi.Order != null)
             .ToListAsync();
 
@@ -457,7 +634,7 @@ public class OrderController : ControllerBase
                 return new
                 {
                     orderID = group.Key.OrderID,
-                    orderNumber = order.OrderNumber, 
+                    orderNumber = order.OrderNumber,
                     batchID = group.Key.BatchID,
                     restaurantTableID = order.RestaurantTableID,
                     createdAt = group.Max(x => x.AddedToKitchenAt),
@@ -504,7 +681,7 @@ public class OrderController : ControllerBase
         var result = orders.Select(o => new
         {
             o.OrderID,
-            orderNumber = o.OrderNumber, 
+            orderNumber = o.OrderNumber,
             o.RestaurantTableID,
             o.KitchenStatus,
             CreatedAt = o.CreatedAt,
@@ -524,7 +701,7 @@ public class OrderController : ControllerBase
         return Ok(new { orders = result });
     }
 
- [HttpPut("kitchen/update-batch-status/{orderId}")]
+    [HttpPut("kitchen/update-batch-status/{orderId}")]
     public async Task<IActionResult> UpdateBatchStatus(int orderId, [FromBody] JsonElement payload, [FromQuery] int restaurantId)
     {
         try
@@ -570,8 +747,8 @@ public class OrderController : ControllerBase
                 _context.WaiterNotifications.Add(new WaiterNotification
                 {
                     OrderId = orderId,
-                    TableNo = tableNo, 
-                    Message = $"Order #{order.OrderNumber} for Table {tableNo} is ready",                    
+                    TableNo = tableNo,
+                    Message = $"Order #{order.OrderNumber} for Table {tableNo} is ready",
                     IsAcknowledged = false,
                     RestaurantID = order.RestaurantID
                 });
@@ -610,17 +787,20 @@ public class OrderController : ControllerBase
         order.OrderStatus = OrderStatus.Confirmed;
         order.UpdatedAt = now;
 
-        int tableNoForNotification = order.RestaurantTableID.HasValue ? order.RestaurantTableID.Value : 0;
+        string label = order.Source == OrderSource.Takeaway
+            ? "Takeaway"
+            : $"Table {order.RestaurantTableID ?? 0}";
 
         var notification = new WaiterNotification
         {
             OrderId = orderId,
-            TableNo = tableNoForNotification, 
-            Message = $"Order #{order.OrderNumber} for Table {tableNoForNotification} is ready",       
+            TableNo = order.RestaurantTableID ?? 0,
+            Message = $"Order #{order.OrderNumber} ({label}) is ready",
             IsAcknowledged = false,
             CreatedAt = now,
             RestaurantID = order.RestaurantID
         };
+
         _context.WaiterNotifications.Add(notification);
 
         await _context.SaveChangesAsync();
@@ -628,7 +808,8 @@ public class OrderController : ControllerBase
         return Ok(new { message = "Order marked as ready!", orderID = orderId });
     }
 
-[HttpPut("kitchen/mark-sound-played/{orderId}")]
+
+    [HttpPut("kitchen/mark-sound-played/{orderId}")]
     public async Task<IActionResult> MarkSoundPlayed(int orderId)
     {
         var order = await _context.Orders.FindAsync(orderId);
@@ -654,11 +835,11 @@ public class OrderController : ControllerBase
             var notification = new WaiterNotification
             {
                 OrderId = orderId,
-                TableNo = tableNo, 
-                Message = $"Order #{order.OrderNumber} for Table {tableNo} is ready", 
+                TableNo = tableNo,
+                Message = $"Order #{order.OrderNumber} for Table {tableNo} is ready",
                 CreatedAt = DateTime.UtcNow,
                 IsAcknowledged = false,
-                RestaurantID = order.RestaurantID 
+                RestaurantID = order.RestaurantID
             };
             _context.WaiterNotifications.Add(notification);
         }
@@ -701,53 +882,47 @@ public class OrderController : ControllerBase
 
         return NoContent();
     }
-
     [HttpPut("{orderId}/serve")]
-    public async Task<IActionResult> ServeOrder(int orderId, [FromQuery] int restaurantId)
+    public async Task<IActionResult> ServeOrder(
+        int orderId,
+        [FromQuery] int restaurantId)
     {
-        try
+        var order = await _context.Orders
+            .Include(o => o.Payments)
+            .FirstOrDefaultAsync(o =>
+                o.OrderID == orderId &&
+                o.RestaurantID == restaurantId);
+
+        if (order == null)
+            return NotFound(new { message = "Order not found." });
+
+        if (order.OrderStatus == OrderStatus.Completed)
+            return BadRequest(new { message = "Order already completed." });
+
+        order.OrderStatus = OrderStatus.Served;
+
+        // 🔥 Check if already fully paid
+        var totalPaid = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
+
+        if (totalPaid >= order.TotalAmount)
         {
-            var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
-            if (order == null) return NotFound(new { message = "Order not found." });
-
-            // Logic: You can serve an order if it is Confirmed
-            if (order.OrderStatus != OrderStatus.Confirmed)
-            {
-                return BadRequest(new { message = $"Cannot serve order in {order.OrderStatus} state." });
-            }
-
-            // Check if a successful payment exists for this order
-            var isPaid = await _context.Payments
-                .AnyAsync(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Success);
-
-            if (isPaid)
-            {
-                // If already paid (Pay Now flow), serving completes the order
-                order.OrderStatus = OrderStatus.Completed;
-                order.ClosedAt = DateTime.UtcNow;
-            }
-            else
-            {
-                // If not paid (Pay Later flow), mark as Served (awaiting payment)
-                order.OrderStatus = OrderStatus.Served;
-            }
-
-            order.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
-
-            return Ok(new
-            {
-                message = isPaid ? "Order completed (Paid & Served)" : "Order served (Awaiting Payment)",
-                orderStatus = order.OrderStatus.ToString(),
-                isPaid = isPaid
-            });
+            order.OrderStatus = OrderStatus.Completed;
+            order.ClosedAt = DateTime.UtcNow;
         }
-        catch (Exception ex)
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
         {
-            _logger.LogError(ex, "Error serving order");
-            return StatusCode(500, "Internal server error");
-        }
+            message = "Order marked as served.",
+            orderStatus = order.OrderStatus
+        });
     }
+
+
+
     [HttpPut("{orderId}/complete")]
     public async Task<IActionResult> CompleteOrder(int orderId, [FromQuery] int restaurantId)
     {
@@ -766,7 +941,7 @@ public class OrderController : ControllerBase
             {
                 message = "Order completed successfully!",
                 orderID = order.OrderID,
-                orderNumber = order.OrderNumber, 
+                orderNumber = order.OrderNumber,
                 orderStatus = order.OrderStatus
             });
         }
@@ -777,36 +952,36 @@ public class OrderController : ControllerBase
         }
     }
 
-    [HttpPut("{orderId}/cancel")]
-    public async Task<IActionResult> CancelOrder(int orderId, [FromQuery] int restaurantId)
-    {
-        try
-        {
-            var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
-            if (order == null || order.RestaurantID != restaurantId)
-                return NotFound(new { message = "Order not found for this restaurant." });
+    //[HttpPut("{orderId}/cancel")]
+    //public async Task<IActionResult> CancelOrder(int orderId, [FromQuery] int restaurantId)
+    //{
+    //    try
+    //    {
+    //        var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
+    //        if (order == null || order.RestaurantID != restaurantId)
+    //            return NotFound(new { message = "Order not found for this restaurant." });
 
-            order.ClosedAt = DateTime.UtcNow;
-            order.OrderStatus = OrderStatus.Cancelled;
+    //        order.ClosedAt = DateTime.UtcNow;
+    //        order.OrderStatus = OrderStatus.Cancelled;
 
-            await _orderRepository.UpdateOrderAsync(order);
+    //        await _orderRepository.UpdateOrderAsync(order);
 
-            return Ok(new
-            {
-                message = "Order cancelled successfully!",
-                orderID = order.OrderID,
-                orderNumber = order.OrderNumber, 
-                orderStatus = order.OrderStatus
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError($"Error cancelling order: {ex.Message}\n{ex.StackTrace}");
-            return StatusCode(500, "An error occurred while cancelling the order.");
-        }
-    }
+    //        return Ok(new
+    //        {
+    //            message = "Order cancelled successfully!",
+    //            orderID = order.OrderID,
+    //            orderNumber = order.OrderNumber,
+    //            orderStatus = order.OrderStatus
+    //        });
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        _logger.LogError($"Error cancelling order: {ex.Message}\n{ex.StackTrace}");
+    //        return StatusCode(500, "An error occurred while cancelling the order.");
+    //    }
+    //}
 
- [HttpPut("waiter-requests/{id}/accept")]
+    [HttpPut("waiter-requests/{id}/accept")]
     public async Task<IActionResult> AcceptWaiterRequest(int id)
     {
         var request = await _context.WaiterRequests.FindAsync(id);
@@ -832,6 +1007,31 @@ public class OrderController : ControllerBase
         if (!updated) return NotFound(new { message = "Order not found." });
 
         return Ok(new { message = $"Order {orderId} status updated to {orderStatus}." });
+    }
+    private async Task RecalculatePaymentStatusAsync(Order order)
+    {
+        var successfulPayments = await _context.Payments
+            .Where(p => p.OrderID == order.OrderID &&
+                        p.PaymentStatus == PaymentStatus.Success)
+            .ToListAsync();
+
+        order.PaidAmount = successfulPayments.Sum(p => p.Amount);
+        order.RemainingAmount = order.TotalAmount - order.PaidAmount;
+
+        if (order.RemainingAmount <= 0)
+        {
+            order.RemainingAmount = 0;
+            order.OrderStatus = OrderStatus.Completed;
+            order.ClosedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            // Paid partially or not paid at all
+            if (order.OrderStatus == OrderStatus.Served)
+                order.OrderStatus = OrderStatus.Served;
+        }
+
+        order.UpdatedAt = DateTime.UtcNow;
     }
 
 
@@ -875,7 +1075,7 @@ public class OrderController : ControllerBase
 
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = $"Waiter {waiterId} assigned to Order {order.OrderNumber} successfully!" }); 
+            return Ok(new { message = $"Waiter {waiterId} assigned to Order {order.OrderNumber} successfully!" });
         }
         catch (Exception ex)
         {
@@ -883,11 +1083,11 @@ public class OrderController : ControllerBase
             return StatusCode(500, "An error occurred while assigning the waiter.");
         }
     }
-  [HttpGet("waiter-requests")]
+    [HttpGet("waiter-requests")]
     public async Task<IActionResult> GetWaiterRequests([FromQuery] int restaurantId)
     {
         var requests = await _context.WaiterRequests
-            .Where(r => r.RestaurantID == restaurantId) 
+            .Where(r => r.RestaurantID == restaurantId)
             .OrderByDescending(r => r.RequestTime)
             .ToListAsync();
 
@@ -915,14 +1115,14 @@ public class OrderController : ControllerBase
         return Ok(new { imagePath = $"/uploads/{uniqueFileName}" });
     }
 
-  
+
     [HttpGet("{orderId}/bill")]
     public async Task<IActionResult> DownloadBill(int orderId)
     {
         var order = await _context.Orders
             .Include(o => o.OrderItems)
               .ThenInclude(oi => oi.Customizations)
-                .ThenInclude(c => c.CustomizationOption) 
+                .ThenInclude(c => c.CustomizationOption)
                 .ThenInclude(oi => oi.Product)
             .Include(o => o.RestaurantTable)
             .FirstOrDefaultAsync(o => o.OrderID == orderId);
@@ -933,7 +1133,7 @@ public class OrderController : ControllerBase
         var restaurant = await _context.Restaurants.FirstOrDefaultAsync();
 
         _orderRepository.CalculateOrderAmounts(order);
-        await _orderRepository.ApplyBestAvailableOfferAsync(order);
+        //await _orderRepository.ApplyBestAvailableOfferAsync(order);
         await _context.SaveChangesAsync();
 
         var pdfBytes = Document.Create(container =>
@@ -1122,7 +1322,6 @@ public class OrderController : ControllerBase
         return Ok(new { message = "Order marked as served" });
     }
 
-
     [HttpPost("{orderId}/pending")]
     public async Task<IActionResult> CreatePendingPayment(
     int orderId,
@@ -1130,17 +1329,20 @@ public class OrderController : ControllerBase
     [FromBody] JsonElement payload)
     {
         var order = await _context.Orders
+            .Include(o => o.Payments)
             .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
 
         if (order == null)
             return NotFound("Order not found");
 
-        var existingPending = await _context.Payments.AnyAsync(p =>
-            p.OrderID == orderId &&
-            p.PaymentStatus == PaymentStatus.Pending);
+        var alreadyPaid = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
 
-        if (existingPending)
-            return BadRequest("Pending payment already exists");
+        var remaining = order.TotalAmount - alreadyPaid;
+
+        if (remaining <= 0)
+            return BadRequest("Order already fully paid");
 
         string method = payload.TryGetProperty("method", out var m)
             ? m.GetString() ?? "Cash"
@@ -1150,17 +1352,21 @@ public class OrderController : ControllerBase
         {
             OrderID = orderId,
             TableNo = order.RestaurantTableID ?? 0,
-            Amount = order.TotalAmount,
+            Amount = remaining,
             PaymentMethod = method,
             PaymentStatus = PaymentStatus.Pending,
-            CreatedAt = DateTime.UtcNow,
-            RestaurantID = restaurantId
+            RestaurantID = restaurantId,
+            CreatedAt = DateTime.UtcNow
         };
 
         _context.Payments.Add(payment);
         await _context.SaveChangesAsync();
 
-        return Ok(new { paymentId = payment.PaymentID });
+        return Ok(new
+        {
+            paymentId = payment.PaymentID,
+            remainingAmount = remaining
+        });
     }
 
 
@@ -1184,8 +1390,8 @@ public class OrderController : ControllerBase
 
         return Ok(new
         {
-            upiID = restaurant.UPI_ID,  
-            upiName = restaurant.UPI_Name ?? restaurant.Name  
+            upiID = restaurant.UPI_ID,
+            upiName = restaurant.UPI_Name ?? restaurant.Name
         });
     }
 
@@ -1249,92 +1455,62 @@ public class OrderController : ControllerBase
         return Ok(new { message = "Payment completed successfully" });
     }
 
-
-
     [HttpPost("{orderId}/initiate-payment")]
     public async Task<IActionResult> InitiatePayment(
-    int orderId,
-    [FromQuery] string method = "UPI",
-    [FromQuery] int restaurantId = 0,
-    [FromQuery] string channel = "Customer")
+        int orderId,
+        [FromQuery] int restaurantId,
+        [FromBody] JsonElement payload,
+        [FromQuery] string method = "UPI",
+        [FromQuery] string channel = "Customer")
     {
-        try
+        var order = await _context.Orders
+            .Include(o => o.Payments)
+            .Include(o => o.OrderItems) // Essential for price calc
+            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+
+        if (order == null) return NotFound(new { message = "Order not found." });
+
+        // 🔥 FIX 1: Recalculate totals including any manual or auto-applied offers
+        _orderRepository.CalculateOrderAmounts(order);
+
+        var alreadyPaid = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
+
+        // 🔥 FIX 2: This 'TotalAmount' is now the correctly discounted price from the server
+        var remainingAmount = order.TotalAmount - alreadyPaid;
+
+        if (remainingAmount <= 0)
         {
-            var order = await _context.Orders
-                .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
-                .Include(o => o.RestaurantTable)
-                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
-
-            if (order == null)
-                return NotFound(new { message = "Order not found for this restaurant." });
-
-            _orderRepository.CalculateOrderAmounts(order);
-            await _context.SaveChangesAsync();
-
-            var transactionId = $"DIGIEAT_{order.OrderNumber}_{DateTime.Now:yyyyMMddHHmmss}"; 
-
-            PaymentChannel paymentChannelEnum;
-            if (channel.Equals("Waiter", StringComparison.OrdinalIgnoreCase))
-            {
-                paymentChannelEnum = PaymentChannel.Waiter;
-            }
-            else
-            {
-                paymentChannelEnum = PaymentChannel.Customer;
-            }
-
-            int tableNo = order.RestaurantTableID.HasValue ? order.RestaurantTableID.Value : 0;
-
-            var payment = new Payment
-            {
-                OrderID = orderId,
-                TableNo = tableNo, 
-                Amount = order.TotalAmount,
-                PaymentMethod = method,
-                PaymentStatus = PaymentStatus.Pending,
-                CreatedAt = DateTime.UtcNow,
-                PaymentChannel = paymentChannelEnum,
-                RestaurantID = restaurantId
-            };
-
-            _context.Payments.Add(payment);
-            await _context.SaveChangesAsync();
-
-            if (method.Equals("UPI", StringComparison.OrdinalIgnoreCase))
-            {
-                var restaurant = await _context.Restaurants
-                    .FirstOrDefaultAsync(r => r.RestaurantID == restaurantId);
-
-                return Ok(new
-                {
-                    method = "UPI",
-                    upiId = restaurant?.UPI_ID,
-                    upiName = restaurant?.UPI_Name ?? restaurant?.Name,
-                    amount = order.TotalAmount,
-                    transactionId,
-                    orderId,
-                    orderNumber = order.OrderNumber, 
-                    paymentId = payment.PaymentID
-                });
-            }
-
             return Ok(new
             {
-                method,
-                message = "Payment initiated successfully!",
-                paymentId = payment.PaymentID,
-                orderId = payment.OrderID,
-                orderNumber = order.OrderNumber, 
-                amount = payment.Amount,
-                status = payment.PaymentStatus.ToString(),
-                channel = payment.PaymentChannel.ToString()
+                message = "Order already fully paid.",
+                isFullyPaid = true,
+                paymentId = -1
             });
         }
-        catch (Exception ex)
+
+        decimal amount = payload.TryGetProperty("amount", out var amt) ? amt.GetDecimal() : remainingAmount;
+
+        // Safety check: don't allow paying more than the discounted total
+        if (amount > remainingAmount) amount = remainingAmount;
+
+        var payment = new Payment
         {
-            _logger.LogError($"Error initiating payment: {ex.Message}");
-            return StatusCode(500, new { message = "Error initiating payment.", error = ex.Message });
-        }
+            OrderID = orderId,
+            TableNo = order.RestaurantTableID ?? 0,
+            Amount = amount,
+            PaymentMethod = method,
+            PaymentStatus = PaymentStatus.Pending,
+            PaymentChannel = channel.Equals("Waiter", StringComparison.OrdinalIgnoreCase) ? PaymentChannel.Waiter : PaymentChannel.Customer,
+            RestaurantID = restaurantId,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _context.Payments.Add(payment);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { paymentId = payment.PaymentID, amount = payment.Amount, isFullyPaid = false });
     }
 
     [HttpGet("pending-payments")]
@@ -1363,15 +1539,15 @@ public class OrderController : ControllerBase
 
             return Ok(payments.Select(p => new
             {
-                paymentID = p.PaymentID,
+                paymentID = p.PaymentID,
                 orderID = p.OrderID,
                 tableNo = p.TableNo,
                 status = p.PaymentStatus.ToString(),
                 method = p.PaymentMethod,
-                orderNumber = p.Order?.OrderNumber, 
+                orderNumber = p.Order?.OrderNumber,
                 amount = p.Amount,
-                paymentChannel = p.PaymentChannel,
-                source = p.Order?.Source.ToString(),
+                paymentChannel = p.PaymentChannel,
+                source = p.Order?.Source.ToString(),
                 createdAt = p.CreatedAt,
                 isNotified = p.IsNotified,
                 items = p.Order?.OrderItems.Select(oi => new
@@ -1447,7 +1623,7 @@ public class OrderController : ControllerBase
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
             .Include(o => o.Payments.OrderByDescending(p => p.CreatedAt))
-            .Where(o => o.RestaurantTable.RestaurantID == restaurantId) 
+            .Where(o => o.RestaurantTable.RestaurantID == restaurantId)
             .ToListAsync();
 
         return Ok(new
@@ -1456,11 +1632,11 @@ public class OrderController : ControllerBase
             orders = orders.Select(order => new
             {
                 orderID = order.OrderID,
-                orderNumber = order.OrderNumber, 
+                orderNumber = order.OrderNumber,
                 createdAt = order.CreatedAt,
                 closedAt = order.ClosedAt,
                 tableNo = order.RestaurantTableID,
-                restaurantId = order.RestaurantTable.RestaurantID,  
+                restaurantId = order.RestaurantTable.RestaurantID,
 
                 orderStatus = Enum.GetName(typeof(OrderStatus), order.OrderStatus),
                 items = order.OrderItems.Select(item => new
@@ -1497,7 +1673,7 @@ public class OrderController : ControllerBase
         return Ok(new
         {
             orderID = order.OrderID,
-            orderNumber = order.OrderNumber, 
+            orderNumber = order.OrderNumber,
             orderStatus = order.OrderStatus,
             createdAt = order.CreatedAt
         });
@@ -1513,7 +1689,7 @@ public class OrderController : ControllerBase
             : DateTime.SpecifyKind(dateTime, DateTimeKind.Utc);
     }
 
- 
+
     private (DateTime, DateTime) GetDateRange(string timeRange, string? customStart, string? customEnd)
     {
         DateTime today = DateTime.Today.ToUniversalTime();
@@ -1617,7 +1793,7 @@ public class OrderController : ControllerBase
                 });
                 break;
 
-            default: 
+            default:
                 groupedQuery = query.GroupBy(o => o.CreatedAt.Date)
                     .Select(g => new
                     {
@@ -1785,7 +1961,12 @@ public class OrderController : ControllerBase
 
             order.KitchenStatus = KitchenStatus.Pending;
             _orderRepository.CalculateOrderAmounts(order);
-            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            if (!order.OfferLocked && order.AppliedOfferID == null)
+            {
+                await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            }
+            _orderRepository.CalculateOrderAmounts(order);
+
 
             await _context.SaveChangesAsync();
             await transaction.CommitAsync();
@@ -1852,7 +2033,12 @@ public class OrderController : ControllerBase
 
             order.KitchenStatus = KitchenStatus.Pending;
             _orderRepository.CalculateOrderAmounts(order);
-            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            if (!order.OfferLocked && order.AppliedOfferID == null)
+            {
+                await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            }
+            _orderRepository.CalculateOrderAmounts(order);
+
 
             await _context.SaveChangesAsync();
             await transaction.CommitAsync();
@@ -1904,7 +2090,7 @@ public class OrderController : ControllerBase
 
             foreach (var payment in pendingPayments)
             {
-                payment.PaymentStatus = PaymentStatus.Failed; 
+                payment.PaymentStatus = PaymentStatus.Failed;
             }
 
             await LogOrderChange(orderId, "ORDER_CANCELLED",
@@ -1929,8 +2115,15 @@ public class OrderController : ControllerBase
             return StatusCode(500, "An error occurred while cancelling the order.");
         }
     }
+    private async Task LogOrderChange(
+    int orderId,
+    string changeType,
+    string description,
+    int? changedByUserId,
+    int restaurantId,
+    string? oldValues = null,
+    string? newValues = null)
 
-    private async Task LogOrderChange(int orderId, string changeType, string description, int? changedByUserId, int restaurantId, string oldValues = null, string newValues = null)
     {
         try
         {
@@ -1945,7 +2138,7 @@ public class OrderController : ControllerBase
                 OrderID = orderId,
                 ChangeType = changeType,
                 Description = description,
-                ChangedByUserID = userExists ? changedByUserId : null, 
+                ChangedByUserID = userExists ? changedByUserId : null,
                 ChangedAt = DateTime.UtcNow,
                 OldValues = oldValues,
                 NewValues = newValues,
@@ -1973,7 +2166,7 @@ public class OrderController : ControllerBase
             var notification = new KitchenNotification
             {
                 OrderId = orderId,
-                TableNo = tableNoForNotification, 
+                TableNo = tableNoForNotification,
                 NotificationTime = DateTime.UtcNow,
                 IsAcknowledged = false,
                 Message = $"Order #{orderId} has been updated - {updateType.Replace("_", " ")}",
@@ -1994,91 +2187,6 @@ public class OrderController : ControllerBase
         return StatusCode(statusCode, new { message });
     }
 
-    [HttpPost("payments/initiate")]
-    public async Task<IActionResult> InitiatePayment(
-        [FromQuery] int orderId,
-        [FromQuery] int restaurantId,
-        [FromQuery] string method = "UPI",
-        [FromQuery] string channel = "Customer")
-    {
-        try
-        {
-            var order = await _context.Orders
-                .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
-                .Include(o => o.RestaurantTable)
-                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
-
-            if (order == null)
-                return NotFound(new { message = "Order not found for this restaurant." });
-
-            _orderRepository.CalculateOrderAmounts(order);
-            await _context.SaveChangesAsync();
-
-            var transactionId = $"DIGIEAT_{order.OrderNumber}_{DateTime.Now:yyyyMMddHHmmss}"; 
-            PaymentChannel paymentChannelEnum = channel.Equals("Waiter", StringComparison.OrdinalIgnoreCase)
-                ? PaymentChannel.Waiter
-                : PaymentChannel.Customer;
-
-            int tableNo = order.RestaurantTableID.HasValue ? order.RestaurantTableID.Value : 0;
-
-            var payment = new Payment
-            {
-                OrderID = orderId,
-                TableNo = tableNo,
-                Amount = order.TotalAmount,
-                PaymentMethod = method,
-                PaymentStatus = PaymentStatus.Pending,
-                CreatedAt = DateTime.UtcNow,
-                PaymentChannel = paymentChannelEnum,
-                RestaurantID = restaurantId
-            };
-
-            _context.Payments.Add(payment);
-            await _context.SaveChangesAsync();
-
-            if (method.Equals("UPI", StringComparison.OrdinalIgnoreCase))
-            {
-                var restaurant = await _context.Restaurants
-                    .FirstOrDefaultAsync(r => r.RestaurantID == restaurantId);
-
-                if (restaurant == null || string.IsNullOrEmpty(restaurant.UPI_ID))
-                    return BadRequest(new { message = "UPI not configured for this restaurant." });
-
-                var upiUri = BuildUpiUri(restaurant.UPI_ID, restaurant.UPI_Name ?? restaurant.Name,
-                        order.TotalAmount, transactionId, $"Order #{order.OrderNumber}"); 
-
-                return Ok(new
-                {
-                    method = "UPI",
-                    upiId = restaurant.UPI_ID,
-                    upiName = restaurant.UPI_Name ?? restaurant.Name,
-                    amount = order.TotalAmount,
-                    transactionId,
-                    orderId,
-                    orderNumber = order.OrderNumber,
-                    paymentId = payment.PaymentID,
-                    upiUri = upiUri
-                });
-            }
-
-            return Ok(new
-            {
-                method,
-                message = "Payment initiated successfully!",
-                paymentId = payment.PaymentID,
-                orderId = payment.OrderID,
-                orderNumber = order.OrderNumber, 
-                amount = payment.Amount,
-                status = payment.PaymentStatus.ToString(),
-                channel = payment.PaymentChannel.ToString()
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError($"Error initiating payment: {ex.Message}");
-            return StatusCode(500, new { message = "Error initiating payment.", error = ex.Message });
-        }
-    }
     private string BuildUpiUri(string upiId, string upiName, decimal amount, string transactionId, string note)
     {
         var encodedUpiId = Uri.EscapeDataString(upiId);
@@ -2122,85 +2230,145 @@ public class OrderController : ControllerBase
     }
     [HttpPost("payments/{paymentId}/cash-complete")]
     public async Task<IActionResult> CompleteCashPayment(
-    int paymentId,
-    [FromQuery] int restaurantId)
+     int paymentId,
+     [FromQuery] int restaurantId)
     {
         var payment = await _context.Payments
             .Include(p => p.Order)
-            .FirstOrDefaultAsync(p => p.PaymentID == paymentId && p.RestaurantID == restaurantId);
+            .ThenInclude(o => o.Payments)
+            .FirstOrDefaultAsync(p =>
+                p.PaymentID == paymentId &&
+                p.RestaurantID == restaurantId);
 
         if (payment == null)
             return NotFound("Payment not found");
+
+        if (payment.PaymentStatus == PaymentStatus.Success)
+            return BadRequest("Payment already completed");
 
         payment.PaymentStatus = PaymentStatus.Success;
         payment.PaymentMethod = "Cash";
         payment.CompletedAt = DateTime.UtcNow;
 
-        var otherPendingPayments = await _context.Payments
-    .Where(p =>
-        p.OrderID == payment.OrderID &&
-        p.PaymentStatus == PaymentStatus.Pending &&
-        p.PaymentID != payment.PaymentID)
-    .ToListAsync();
+        var order = payment.Order;
 
-        foreach (var p in otherPendingPayments)
+        var totalPaid = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
+
+        order.PaidAmount = totalPaid;
+        order.RemainingAmount = order.TotalAmount - totalPaid;
+
+        if (order.RemainingAmount <= 0)
         {
-            p.PaymentStatus = PaymentStatus.Failed;
+            order.RemainingAmount = 0;
+            order.OrderStatus = OrderStatus.Completed;
+            order.ClosedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            order.OrderStatus = OrderStatus.Served;
         }
 
-
-
-        if (payment.Order != null)
-        {
-            payment.Order.OrderStatus = OrderStatus.Completed;
-            payment.Order.ClosedAt = DateTime.UtcNow;
-        }
+        order.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
 
-        return Ok(new { success = true });
+        return Ok(new
+        {
+            success = true,
+            paidAmount = order.PaidAmount,
+            remainingAmount = order.RemainingAmount,
+            orderStatus = order.OrderStatus.ToString()
+        });
     }
+    [HttpGet("{orderId}/payment-summary")]
+    public async Task<IActionResult> GetPaymentSummary(
+    int orderId,
+    [FromQuery] int restaurantId)
+    {
+        var order = await _context.Orders
+            .Include(o => o.Payments)
+            .FirstOrDefaultAsync(o =>
+                o.OrderID == orderId &&
+                o.RestaurantID == restaurantId);
 
+        if (order == null)
+            return NotFound(new { message = "Order not found." });
 
+        var paidAmount = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
 
+        var totalAmount = order.TotalAmount;
+        var remainingAmount = totalAmount - paidAmount;
+
+        return Ok(new
+        {
+            orderId = order.OrderID,
+            totalAmount,
+            paidAmount,
+            remainingAmount
+        });
+    }
 
     [HttpPut("payments/{paymentId}/complete")]
     public async Task<IActionResult> CompletePayment(
-    int paymentId,
-    [FromQuery] int restaurantId)
+        int paymentId,
+        [FromQuery] int restaurantId)
     {
         var payment = await _context.Payments
             .Include(p => p.Order)
-            .FirstOrDefaultAsync(p => p.PaymentID == paymentId && p.RestaurantID == restaurantId);
+            .FirstOrDefaultAsync(p =>
+                p.PaymentID == paymentId &&
+                p.RestaurantID == restaurantId);
 
         if (payment == null)
-            return NotFound("Payment not found");
+            return NotFound(new { message = "Payment not found." });
 
-        // FIX: Do NOT set payment.PaymentMethod = "UPI" here.
-        // Let it keep the value set during the InitiatePayment call (Cash or UPI).
+        if (payment.PaymentStatus == PaymentStatus.Success)
+            return BadRequest(new { message = "Payment already completed." });
 
+        var order = payment.Order;
+
+        if (order == null)
+            return BadRequest(new { message = "Associated order not found." });
+
+        // ✅ Mark payment as successful
         payment.PaymentStatus = PaymentStatus.Success;
         payment.CompletedAt = DateTime.UtcNow;
 
-        if (payment.Order != null)
+        // 🔥 Recalculate paid amount
+        var totalPaid = await _context.Payments
+            .Where(p => p.OrderID == order.OrderID &&
+                        p.PaymentStatus == PaymentStatus.Success)
+            .SumAsync(p => (decimal?)p.Amount) ?? 0;
+
+        order.PaidAmount = totalPaid;
+        order.RemainingAmount = order.TotalAmount - totalPaid;
+
+        // 🔥 IMPORTANT: Only complete order if SERVED
+        if (order.RemainingAmount <= 0)
         {
-            // If order was served, mark it fully completed/closed
-            if (payment.Order.OrderStatus == OrderStatus.Served)
+            if (order.OrderStatus == OrderStatus.Served)
             {
-                payment.Order.OrderStatus = OrderStatus.Completed;
-                payment.Order.ClosedAt = DateTime.UtcNow;
-            }
-            else
-            {
-                // If it was just confirmed/pending, keep it confirmed for the kitchen
-                payment.Order.OrderStatus = OrderStatus.Confirmed;
+                order.OrderStatus = OrderStatus.Completed;
+                order.ClosedAt = DateTime.UtcNow;
             }
         }
 
         await _context.SaveChangesAsync();
 
-        return Ok(new { success = true });
+        return Ok(new
+        {
+            message = "Payment marked as success.",
+            orderStatus = order.OrderStatus,
+            paidAmount = order.PaidAmount,
+            remainingAmount = order.RemainingAmount
+        });
     }
+
+
 
 
 
@@ -2332,6 +2500,39 @@ public class OrderController : ControllerBase
             return StatusCode(500, new { message = "An error occurred while updating the order." });
         }
     }
+    [HttpGet("takeaway")]
+    public async Task<IActionResult> GetTakeawayOrders([FromQuery] int restaurantId)
+    {
+        var orders = await _context.Orders
+            .Include(o => o.OrderItems)
+                .ThenInclude(i => i.Product)
+            .Include(o => o.Payments)
+            .Where(o =>
+                o.RestaurantID == restaurantId &&
+                o.Source == OrderSource.Takeaway &&
+                o.OrderStatus != OrderStatus.Completed &&
+                o.OrderStatus != OrderStatus.Cancelled)
+            .OrderByDescending(o => o.CreatedAt)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            message = "Takeaway orders fetched successfully",
+            orders = orders.Select(o => new
+            {
+                orderID = o.OrderID,
+                orderNumber = o.OrderNumber,
+                status = o.OrderStatus.ToString(),
+                total = o.TotalAmount,
+                createdAt = o.CreatedAt,
+                items = o.OrderItems.Select(i => new
+                {
+                    name = i.Product?.ProductName,
+                    qty = i.Quantity
+                })
+            })
+        });
+    }
 
     [HttpGet("restaurant/{restaurantId}/details")]
     public async Task<IActionResult> GetRestaurantDetails(int restaurantId)
@@ -2359,51 +2560,151 @@ public class OrderController : ControllerBase
             return StatusCode(500, "An error occurred while fetching restaurant details.");
         }
     }
-
     [HttpGet("{orderId}/payment-status")]
-    public async Task<IActionResult> GetOrderPaymentStatus(int orderId, [FromQuery] int restaurantId)
-    {
-        try
-        {
-            var order = await _context.Orders
-                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
-
-            if (order == null)
-            {
-                return Ok(new { paid = false, message = "Order not found." });
-            }
-
-
-            if (order.OrderStatus == OrderStatus.Completed)
-            {
-                return Ok(new { paid = true, orderNumber = order.OrderNumber }); 
-            }
-
-            var successfulPayment = await _context.Payments
-                .AnyAsync(p => p.OrderID == orderId && p.PaymentStatus == PaymentStatus.Success);
-
-            if (successfulPayment)
-            {
-                return Ok(new { paid = true, orderNumber = order.OrderNumber }); 
-            }
-
-            return Ok(new { paid = false, orderNumber = order.OrderNumber });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError($"Error checking payment status for OrderID {orderId}: {ex.Message}");
-            return StatusCode(500, new { message = "Error checking payment status." });
-        }
-    }
-    [HttpPost("{orderId}/print-bill")]
-    public async Task<IActionResult> PrintBill(
+    public async Task<IActionResult> GetOrderPaymentStatus(
     int orderId,
     [FromQuery] int restaurantId)
     {
-        // 1️⃣ Fetch order
+        var order = await _context.Orders
+            .Include(o => o.Payments)
+            .FirstOrDefaultAsync(o =>
+                o.OrderID == orderId &&
+                o.RestaurantID == restaurantId);
+
+        if (order == null)
+            return NotFound();
+
+        var paid = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
+
+        return Ok(new
+        {
+            total = order.TotalAmount,
+            paid,
+            remaining = order.TotalAmount - paid,
+            isFullyPaid = paid >= order.TotalAmount
+        });
+    }
+
+    //[HttpPost("{orderId}/print-bill")]
+    //public async Task<IActionResult> PrintBill(
+    //int orderId,
+    //[FromQuery] int restaurantId)
+    //{
+    //    // 1️⃣ Fetch order with payments
+    //    var order = await _context.Orders
+    //        .Include(o => o.OrderItems)
+    //            .ThenInclude(oi => oi.Product)
+    //        .Include(o => o.Payments)
+    //        .FirstOrDefaultAsync(o =>
+    //            o.OrderID == orderId &&
+    //            o.RestaurantID == restaurantId);
+
+    //    if (order == null)
+    //    {
+    //        return NotFound(new { message = "Order not found." });
+    //    }
+
+    //    // 2️⃣ Calculate total paid (SUPPORTS PARTIAL PAYMENTS)
+    //    var totalPaid = order.Payments
+    //        .Where(p => p.PaymentStatus == PaymentStatus.Success)
+    //        .Sum(p => p.Amount);
+
+    //    // 3️⃣ BLOCK PRINT IF PAYMENT NOT COMPLETE
+    //    if (totalPaid < order.TotalAmount)
+    //    {
+    //        return BadRequest(new
+    //        {
+    //            message = "❌ Payment pending. Complete full payment before printing bill.",
+    //            totalAmount = order.TotalAmount,
+    //            paidAmount = totalPaid,
+    //            remainingAmount = order.TotalAmount - totalPaid
+    //        });
+    //    }
+
+    //    // 4️⃣ BLOCK DOUBLE PRINT
+    //    if (order.ClosedAt != null)
+    //    {
+    //        return BadRequest(new
+    //        {
+    //            message = "❌ Bill already printed for this order."
+    //        });
+    //    }
+
+    //    // 5️⃣ Get BILL printer
+    //    var printer = await GetPrinterConfig(restaurantId, "BILL");
+    //    if (printer == null)
+    //    {
+    //        return BadRequest(new
+    //        {
+    //            message = "Bill printer not configured."
+    //        });
+    //    }
+
+    //    // 6️⃣ Build print payload
+    //    var payload = new
+    //    {
+    //        Type = "BILL",
+    //        PrinterName = printer.PrinterName,
+    //        RestaurantName = printer.HeaderText,
+    //        RestaurantAddress = printer.Address,
+    //        Footer = string.IsNullOrWhiteSpace(printer.FooterText)
+    //            ? "Thank you, visit again"
+    //            : printer.FooterText,
+
+    //        Order = new
+    //        {
+    //            OrderNumber = order.OrderNumber.ToString(),
+    //            TableNo = order.RestaurantTableID?.ToString() ?? "0",
+
+    //            Items = order.OrderItems.Select(i => new
+    //            {
+    //                Name = i.Product?.ProductName ?? "Item",
+    //                Qty = i.Quantity,
+    //                Price = i.UnitPrice,
+    //                Total = i.Quantity * i.UnitPrice
+    //            }).ToList(),
+
+    //            Subtotal = order.Subtotal,
+    //            Discount = order.DiscountAmount,
+    //            CGST = order.CGST,
+    //            SGST = order.SGST,
+    //            ServiceCharge = order.ServiceCharge,
+    //            GrandTotal = order.TotalAmount,
+    //            PaidAmount = totalPaid
+    //        }
+    //    };
+
+    // 7️⃣ Send to printer queue
+    //    await SavePrintJob(restaurantId, payload);
+
+    //    // 8️⃣ CLOSE ORDER (FINAL STEP)
+    //    order.OrderStatus = OrderStatus.Completed;
+    //    order.ClosedAt = DateTime.UtcNow;
+    //    order.UpdatedAt = DateTime.UtcNow;
+
+    //    await _context.SaveChangesAsync();
+
+    //    return Ok(new
+    //    {
+    //        success = true,
+    //        message = "✅ Bill printed successfully",
+    //        orderNumber = order.OrderNumber,
+    //        totalAmount = order.TotalAmount,
+    //        paidAmount = totalPaid
+    //    });
+    //}
+
+    [HttpPost("{orderId}/print-bill")]
+    public async Task<IActionResult> PrintBill(int orderId, [FromQuery] int restaurantId)
+    {
+        // 1️⃣ Fetch order with related data and payments
         var order = await _context.Orders
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
+            .Include(o => o.Payments)
+            .Include(o => o.RestaurantTable)
             .FirstOrDefaultAsync(o =>
                 o.OrderID == orderId &&
                 o.RestaurantID == restaurantId);
@@ -2413,29 +2714,30 @@ public class OrderController : ControllerBase
             return NotFound(new { message = "Order not found." });
         }
 
-        // 2️⃣ BLOCK PRINT IF PAYMENT NOT DONE
-        var isPaid = await _context.Payments.AnyAsync(p =>
-            p.OrderID == orderId &&
-            p.RestaurantID == restaurantId &&
-            p.PaymentStatus == PaymentStatus.Success);
+        // 2️⃣ Calculate total successful payments
+        var totalPaid = order.Payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .Sum(p => p.Amount);
 
-        if (!isPaid)
+        // 3️⃣ Calculate remaining amount
+        var remainingAmount = order.TotalAmount - totalPaid;
+
+        // 🔥 FIX: Use a ₹1.00 tolerance grace. 
+        // This prevents orders from getting stuck due to ₹0.60 or similar rounding issues.
+        if (remainingAmount > 1.0m)
         {
             return BadRequest(new
             {
-                message = "❌ Payment not completed. Bill cannot be printed."
+                message = "❌ Payment pending. Complete full payment before printing bill.",
+                totalAmount = order.TotalAmount,
+                paidAmount = totalPaid,
+                remainingAmount = remainingAmount
             });
         }
 
-        if (order.ClosedAt != null)
-        {
-            return BadRequest(new
-            {
-                message = "❌ Bill already printed for this order."
-            });
-        }
-
+        // 4️⃣ Get BILL printer configuration
         var printer = await GetPrinterConfig(restaurantId, "BILL");
+
         if (printer == null)
         {
             return BadRequest(new
@@ -2443,6 +2745,15 @@ public class OrderController : ControllerBase
                 message = "Bill printer not configured."
             });
         }
+
+        // 5️⃣ Build Print Payload (Labels for takeaway vs Dine-in)
+        string tableLabel = order.Source == OrderSource.Takeaway
+            ? "TAKEAWAY"
+            : order.RestaurantTableID?.ToString() ?? "0";
+
+        string orderTypeLabel = order.Source == OrderSource.Takeaway
+            ? "Takeaway"
+            : "Dine-In";
 
         var payload = new
         {
@@ -2457,33 +2768,47 @@ public class OrderController : ControllerBase
             Order = new
             {
                 OrderNumber = order.OrderNumber.ToString(),
-                TableNo = order.RestaurantTableID?.ToString() ?? "0",
+                OrderType = orderTypeLabel,
+                TableNo = tableLabel,
 
                 Items = order.OrderItems.Select(i => new
                 {
-                    Name = i.Product?.ProductName,
+                    Name = i.Product?.ProductName ?? "Item",
                     Qty = i.Quantity,
-                    Price = i.UnitPrice
+                    Price = i.UnitPrice,
+                    Total = i.Quantity * i.UnitPrice
                 }).ToList(),
 
-                Total = order.TotalAmount
+                Subtotal = order.Subtotal,
+                Discount = order.DiscountAmount,
+                CGST = order.CGST,
+                SGST = order.SGST,
+                ServiceCharge = order.ServiceCharge,
+                GrandTotal = order.TotalAmount,
+                PaidAmount = totalPaid
             }
         };
+
+        // 6️⃣ Save print job to queue
         await SavePrintJob(restaurantId, payload);
 
-        order.ClosedAt = DateTime.UtcNow;
+        // 7️⃣ CLOSE ORDER: Change status to Completed to move it to History
         order.OrderStatus = OrderStatus.Completed;
+        order.ClosedAt = DateTime.UtcNow;
+        order.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
 
         return Ok(new
         {
             success = true,
-            message = "✅ Bill printed successfully",
-            orderNumber = order.OrderNumber
+            message = "✅ Bill printed and order moved to history.",
+            orderNumber = order.OrderNumber,
+            orderType = orderTypeLabel,
+            totalAmount = order.TotalAmount,
+            paidAmount = totalPaid
         });
     }
-
 
     private (DateTime startUtc, DateTime endUtc) NormalizeDateRange(DateTime start, DateTime end)
     {
@@ -2505,16 +2830,23 @@ public class OrderController : ControllerBase
             .ToListAsync();
 
         var todayOrders = orders
-            .Where(o => o.CreatedAt >= todayUtc && o.CreatedAt < tomorrowUtc);
+            .Where(o => o.CreatedAt >= todayUtc && o.CreatedAt < tomorrowUtc)
+            .ToList();
 
         var liveOrders = orders.Count(o =>
             o.OrderStatus != OrderStatus.Completed &&
             o.OrderStatus != OrderStatus.Cancelled);
 
+        // Count orders with any successful payment today
         var paidTodayOrders = todayOrders
-            .Where(o => o.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success));
+            .Where(o => (o.Payments ?? new List<Payment>()).Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .ToList();
 
-        var todayRevenue = paidTodayOrders.Sum(o => o.TotalAmount);
+        // Revenue should be the *sum of successful payments* for today's orders
+        var todayRevenue = todayOrders.Sum(o => (o.Payments ?? new List<Payment>())
+                                                    .Where(p => p.PaymentStatus == PaymentStatus.Success)
+                                                    .Sum(p => p.Amount));
+
         var orderCount = paidTodayOrders.Count();
 
         return Ok(new
@@ -2522,7 +2854,7 @@ public class OrderController : ControllerBase
             liveOrders,
             todayRevenue,
             todayOrders = orderCount,
-            avgOrderValue = orderCount > 0 ? todayRevenue / orderCount : 0
+            avgOrderValue = orderCount > 0 ? (todayRevenue / orderCount) : 0
         });
     }
 
@@ -2540,17 +2872,30 @@ public class OrderController : ControllerBase
             .Where(o =>
                 o.RestaurantID == restaurantId &&
                 o.CreatedAt >= startUtc &&
-                o.CreatedAt <= endUtc &&
-                o.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
+                o.CreatedAt <= endUtc)
             .ToListAsync();
+
+        // Consider orders that have at least one successful payment
+        var paidOrders = orders
+            .Where(o => (o.Payments ?? new List<Payment>()).Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .ToList();
+
+        var grossRevenue = paidOrders.Sum(o => (o.Payments ?? new List<Payment>())
+                                                .Where(p => p.PaymentStatus == PaymentStatus.Success)
+                                                .Sum(p => p.Amount));
+
+        // Discount/tax/net: keep existing semantics but netRevenue should use actual paid amounts
+        var discount = paidOrders.Sum(o => o.DiscountAmount);
+        var tax = paidOrders.Sum(o => o.CGST + o.SGST);
+        var netRevenue = grossRevenue; // using amount actually paid
 
         return Ok(new
         {
-            totalOrders = orders.Count,
-            grossRevenue = orders.Sum(o => o.Subtotal),
-            discount = orders.Sum(o => o.DiscountAmount),
-            tax = orders.Sum(o => o.CGST + o.SGST),
-            netRevenue = orders.Sum(o => o.TotalAmount)
+            totalOrders = paidOrders.Count,
+            grossRevenue,
+            discount,
+            tax,
+            netRevenue
         });
     }
 
@@ -2584,7 +2929,10 @@ public class OrderController : ControllerBase
 
 
     [HttpGet("manager/reports/items")]
-    public async Task<IActionResult> GetItemReport(int restaurantId, DateTime startDate, DateTime endDate)
+    public async Task<IActionResult> GetItemReport(
+     int restaurantId,
+     DateTime startDate,
+     DateTime endDate)
     {
         var (startUtc, endUtc) = NormalizeDateRange(startDate, endDate);
 
@@ -2592,27 +2940,44 @@ public class OrderController : ControllerBase
             .Include(i => i.Product)
             .Include(i => i.Order)
                 .ThenInclude(o => o.Payments)
-            .Where(i => i.Order.RestaurantID == restaurantId &&
-                        i.Order.CreatedAt >= startUtc &&
-                        i.Order.CreatedAt <= endUtc &&
-                        // CRITICAL: Any order that has a successful payment is considered a sale
-                        i.Order.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .Include(i => i.Order)
+                .ThenInclude(o => o.AppliedOffer)
+            .Where(i =>
+                i.Order.RestaurantID == restaurantId &&
+                i.Order.CreatedAt >= startUtc &&
+                i.Order.CreatedAt <= endUtc &&
+                i.Order.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success))
             .ToListAsync();
 
         var reportData = items
             .Where(i => i.Product != null)
             .GroupBy(i => i.Product.ProductName)
-            .Select(g => new
+            .Select(g =>
             {
-                itemName = g.Key,
-                quantitySold = g.Sum(x => x.Quantity),
-                revenue = g.Sum(x => x.Quantity * x.UnitPrice)
+                var gross = g.Sum(x => x.Quantity * x.UnitPrice);
+
+                var discount = g.Sum(x =>
+                    x.Order.Subtotal > 0
+                        ? ((x.Quantity * x.UnitPrice) / x.Order.Subtotal) * x.Order.DiscountAmount
+                        : 0
+                );
+
+                return new
+                {
+                    itemName = g.Key,
+                    quantitySold = g.Sum(x => x.Quantity),
+                    grossRevenue = gross,
+                    totalDiscount = discount,
+                    netRevenue = gross - discount
+                };
             })
             .OrderByDescending(x => x.quantitySold)
             .ToList();
 
         return Ok(reportData);
     }
+
+
 
 
     [HttpGet("manager/reports/categories")]
@@ -2641,6 +3006,7 @@ public class OrderController : ControllerBase
 
         return Ok(groupedData);
     }
+
 
     [HttpGet("manager/reports/live-orders")]
     public async Task<IActionResult> GetLiveOrders(int restaurantId)
@@ -2675,17 +3041,16 @@ public class OrderController : ControllerBase
         }));
     }
 
-
-
     [HttpGet("manager/reports/past-orders")]
     public async Task<IActionResult> GetPastOrders(
-        int restaurantId,
-        DateTime? startDate,
-        DateTime? endDate)
+      int restaurantId,
+      DateTime? startDate,
+      DateTime? endDate)
     {
         IQueryable<Order> query = _context.Orders
             .Include(o => o.RestaurantTable)
             .Include(o => o.Payments)
+            .Include(o => o.AppliedOffer)
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
             .Where(o => o.RestaurantID == restaurantId);
@@ -2700,121 +3065,255 @@ public class OrderController : ControllerBase
             .OrderByDescending(o => o.CreatedAt)
             .ToListAsync();
 
-        return Ok(orders.Select(o => new
+        var result = orders.Select(o =>
         {
-            orderID = o.OrderID,
-            orderNumber = o.OrderNumber,
-            date = o.CreatedAt,
-            table = o.RestaurantTableID,
-            status = o.OrderStatus.ToString(),
-            total = o.TotalAmount,
-            paymentMode = o.Payments
-    .Where(p => p.PaymentStatus == PaymentStatus.Success)
-    .OrderByDescending(p => p.CompletedAt ?? p.CreatedAt)
-    .Select(p => p.PaymentMethod)
-    .FirstOrDefault()
-    ?? "Pending",
+            // Only successful payments
+            var successfulPayments = o.Payments
+                .Where(p => p.PaymentStatus == PaymentStatus.Success)
+                .ToList();
 
-            // ✅ ITEMS INCLUDED
-            items = o.OrderItems.Select(i => new
+            var cashPaid = successfulPayments
+                .Where(p => p.PaymentMethod == "Cash")
+                .Sum(p => p.Amount);
+
+            var upiPaid = successfulPayments
+                .Where(p => p.PaymentMethod == "UPI")
+                .Sum(p => p.Amount);
+
+            var totalPaid = successfulPayments.Sum(p => p.Amount);
+            var remaining = Math.Max(o.TotalAmount - totalPaid, 0);
+
+            var paymentType = remaining == 0 && totalPaid > 0
+                ? "Full"
+                : totalPaid > 0
+                    ? "Partial"
+                    : "Pending";
+
+            return new
             {
-                itemName = i.Product.ProductName,
-                quantity = i.Quantity,
-                unitPrice = i.UnitPrice,
-                totalPrice = i.Quantity * i.UnitPrice
-            })
-        }));
+                orderID = o.OrderID,
+                orderNumber = o.OrderNumber,
+                date = o.CreatedAt,
+                table = o.RestaurantTableID,
+                status = o.OrderStatus.ToString(),
+
+                // Financials
+                total = o.TotalAmount,
+                paid = totalPaid,
+                remaining,
+                paymentType,
+
+                cashPaid,
+                upiPaid,
+
+                // Payment breakdown (using your real properties)
+                payments = successfulPayments.Select(p => new
+                {
+                    paymentMethod = p.PaymentMethod,
+                    amount = p.Amount,
+                    channel = p.PaymentChannel.ToString(),
+                    isPartial = p.IsPartial,
+                    createdAt = p.CreatedAt,
+                    completedAt = p.CompletedAt
+                }),
+
+                // Item breakdown with proportional discount
+                items = o.OrderItems.Select(i =>
+                {
+                    var gross = i.Quantity * i.UnitPrice;
+
+                    var discountShare = o.Subtotal > 0
+                        ? (gross / o.Subtotal) * o.DiscountAmount
+                        : 0;
+
+                    return new
+                    {
+                        itemName = i.Product?.ProductName ?? $"Product {i.ProductID}",
+                        quantity = i.Quantity,
+                        originalPrice = gross,
+                        discountAmount = discountShare,
+                        finalPrice = gross - discountShare,
+                        offerName = o.AppliedOffer != null
+                            ? o.AppliedOffer.Name
+                            : null
+                    };
+                })
+            };
+        });
+
+        return Ok(result);
     }
+
+
 
     [HttpGet("manager/reports/dashboard-stats")]
     public async Task<IActionResult> GetManagerDashboardStats([FromQuery] int restaurantId)
     {
-        // Set time range for Today (UTC)
         var todayUtc = DateTime.UtcNow.Date;
         var tomorrowUtc = todayUtc.AddDays(1);
 
-        // 1. Fetch orders with necessary related data using eager loading
-        // .ThenInclude is critical here to prevent the NullReferenceException on Product
         var orders = await _context.Orders
             .Include(o => o.Payments)
+            .Include(o => o.AppliedOffer)
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
-            .Where(o => o.RestaurantID == restaurantId && o.CreatedAt >= todayUtc && o.CreatedAt < tomorrowUtc)
+            .Where(o =>
+                o.RestaurantID == restaurantId &&
+                o.CreatedAt >= todayUtc &&
+                o.CreatedAt < tomorrowUtc)
             .ToListAsync();
 
-        // 2. Filter for paid orders to calculate financial KPIs
-        var paidOrders = orders.Where(o => o.Payments.Any(p => p.PaymentStatus == PaymentStatus.Success)).ToList();
-        var totalRevenue = paidOrders.Sum(o => o.TotalAmount);
-        var totalOrders = paidOrders.Count;
+        // Revenue = successful payments only
+        var totalRevenue = orders.Sum(o =>
+            (o.Payments ?? new List<Payment>())
+                .Where(p => p.PaymentStatus == PaymentStatus.Success)
+                .Sum(p => p.Amount));
 
-        // AOV (Average Order Value) Calculation
+        var paidOrders = orders
+            .Where(o => (o.Payments ?? new List<Payment>())
+                .Any(p => p.PaymentStatus == PaymentStatus.Success))
+            .ToList();
+
+        var totalOrders = paidOrders.Count;
         var avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
-        // 3. Peak Hour Analysis (Grouped by Hour)
-        var hourlySales = orders
-            .GroupBy(o => o.CreatedAt.Hour)
-            .Select(g => new {
-                Hour = g.Key,
-                Sales = g.Sum(o => o.TotalAmount),
-                Count = g.Count(),
-                // Percent used for frontend bar chart scaling
-                Percent = totalRevenue > 0 ? (g.Sum(o => o.TotalAmount) / totalRevenue) * 100 : 0
-            })
-            .OrderBy(h => h.Hour)
-            .ToList();
+        var totalDiscount = orders.Sum(o => o.DiscountAmount);
 
-        // 4. Payment Method Breakdown (UPI, Cash, etc.)
-        var paymentBreakdown = orders
-            .SelectMany(o => o.Payments)
-            .Where(p => p.PaymentStatus == PaymentStatus.Success)
-            .GroupBy(p => p.PaymentMethod)
-            .Select(g => new {
-                Mode = g.Key,
-                Amount = g.Sum(p => p.Amount),
-                Percent = totalOrders > 0
-                    ? Math.Round((decimal)g.Count() / totalOrders * 100, 1)
+        // ================= TOP ITEMS WITH DISCOUNT DISTRIBUTION =================
+        var topItems = orders
+            .SelectMany(o =>
+                o.OrderItems.Select(i =>
+                {
+                    var gross = i.Quantity * i.UnitPrice;
+
+                    var discountShare = o.Subtotal > 0
+                        ? (gross / o.Subtotal) * o.DiscountAmount
+                        : 0;
+
+                    return new
+                    {
+                        ProductName = i.Product?.ProductName ?? "Unknown",
+                        Quantity = i.Quantity,
+                        Gross = gross,
+                        DiscountShare = discountShare,
+                        Net = gross - discountShare
+                    };
+                })
+            )
+            .GroupBy(x => x.ProductName)
+            .Select(g => new
+            {
+                name = g.Key,
+                qty = g.Sum(x => x.Quantity),
+                grossRevenue = g.Sum(x => x.Gross),
+                totalDiscount = g.Sum(x => x.DiscountShare),
+                netRevenue = g.Sum(x => x.Net),
+                contribution = totalRevenue > 0
+                    ? Math.Round((g.Sum(x => x.Net) / totalRevenue) * 100, 1)
                     : 0
             })
-            .ToList();
-
-
-        // 5. Table Turnover Rate 
-        // Measures how many unique orders were served per table today
-        var totalTables = await _context.RestaurantTables.CountAsync(t => t.RestaurantID == restaurantId);
-        var tableTurnover = totalTables > 0 ? Math.Round((double)totalOrders / totalTables, 2) : 0;
-
-        // 6. Top 5 Best Sellers
-        // Added safety check (i.Product != null) to prevent crash if a product record is missing
-        var topItems = orders
-            .SelectMany(o => o.OrderItems)
-            .Where(i => i.Product != null)
-            .GroupBy(i => i.Product.ProductName)
-            .Select(g => new {
-                Name = g.Key,
-                Qty = g.Sum(x => x.Quantity),
-                Revenue = g.Sum(x => x.Quantity * x.UnitPrice),
-                Contribution = totalRevenue > 0 ? Math.Round((g.Sum(x => x.Quantity * x.UnitPrice) / totalRevenue) * 100, 1) : 0
-            })
-            .OrderByDescending(x => x.Qty)
+            .OrderByDescending(x => x.qty)
             .Take(5)
             .ToList();
 
-        // Return the consolidated data for the dashboard UI
         return Ok(new
         {
             totalRevenue,
+            totalDiscount,
             totalOrders,
             avgOrderValue,
-            tableTurnover,
-            hourlySales,
-            payments = paymentBreakdown,
             topItems
+        });
+    }
+    [HttpPut("{orderId}/apply-offer")]
+    public async Task<IActionResult> ApplyOfferManually(
+    int orderId,
+    [FromQuery] int restaurantId,
+    [FromBody] JsonElement payload)
+    {
+        if (!payload.TryGetProperty("offerId", out var offerProp))
+            return BadRequest("offerId required");
+
+        int offerId = offerProp.GetInt32();
+
+        await using var tx = await _context.Database.BeginTransactionAsync();
+
+        try
+        {
+            var order = await _orderRepository
+                .GetOrderByIdWithItemsAsync(orderId, restaurantId);
+
+            if (order == null)
+                return NotFound("Order not found");
+
+            if (order.OrderStatus == OrderStatus.Completed ||
+                order.OrderStatus == OrderStatus.Cancelled)
+                return BadRequest("Cannot apply offer to closed order");
+
+            // 🔹 Force clear existing offer
+            order.AppliedOfferID = null;
+            order.DiscountAmount = 0;
+
+            _orderRepository.CalculateOrderAmounts(order);
+
+            // 🔹 Apply specific offer (not best offer)
+            var success = await _orderRepository
+                .ApplySpecificOfferAsync(order, offerId);
+
+            if (!success)
+                return BadRequest("Offer not valid for this order");
+
+            _orderRepository.CalculateOrderAmounts(order);
+
+            order.OfferLocked = false; // allow recalculation until confirm
+
+            await _context.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            return Ok(new
+            {
+                message = "Offer applied successfully",
+                discount = order.DiscountAmount,
+                total = order.TotalAmount
+            });
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            _logger.LogError(ex, "Manual offer apply failed");
+            return StatusCode(500, "Failed to apply offer");
+        }
+    }
+    [HttpPut("{orderId}/remove-offer")]
+    public async Task<IActionResult> RemoveOffer(
+    int orderId,
+    [FromQuery] int restaurantId)
+    {
+        var order = await _orderRepository
+            .GetOrderByIdWithItemsAsync(orderId, restaurantId);
+
+        if (order == null)
+            return NotFound();
+
+        order.AppliedOfferID = null;
+        order.DiscountAmount = 0;
+        order.OfferLocked = false;
+
+        _orderRepository.CalculateOrderAmounts(order);
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = "Offer removed",
+            total = order.TotalAmount
         });
     }
 
 
+
     [HttpGet("with-waiter")]
-    public async Task<IActionResult> GetOrdersWithWaiters([FromQuery] int restaurantId) 
+    public async Task<IActionResult> GetOrdersWithWaiters([FromQuery] int restaurantId)
     {
         var orders = await _context.Orders
             .Include(o => o.OrderItems)
@@ -2822,9 +3321,8 @@ public class OrderController : ControllerBase
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Customizations)
                 .ThenInclude(c => c.CustomizationOption)
-            .Include(o => o.Payments.OrderByDescending(p => p.CreatedAt))
-
-            .Where(o => o.RestaurantID == restaurantId) 
+            .Include(o => o.Payments)
+            .Where(o => o.RestaurantID == restaurantId)
             .ToListAsync();
 
         foreach (var order in orders)
@@ -2835,47 +3333,56 @@ public class OrderController : ControllerBase
         return Ok(new
         {
             message = "Orders fetched successfully!",
-            orders = orders.Select(order => new
+            orders = orders.Select(order =>
             {
-                orderID = order.OrderID,
-                orderNumber = order.OrderNumber, 
-                createdAt = order.CreatedAt,
-                closedAt = order.ClosedAt,
-                tableNo = order.RestaurantTableID,
-                orderStatus = order.OrderStatus.ToString(),
-                kitchenStatus = order.KitchenStatus.ToString(),
-                subtotal = order.Subtotal,
-                discountAmount = order.DiscountAmount,
-                cgst = order.CGST,
-                sgst = order.SGST,
-                serviceCharge = order.ServiceCharge,
-                totalAmount = order.TotalAmount,
-                items = order.OrderItems.Select(item => new
-                {
-                    orderItemID = item.OrderItemID, 
+                var summary = GetPaymentSummary(order);
 
-                    productID = item.ProductID,
-                    productName = item.Product?.ProductName ?? $"Product {item.ProductID}",
-                    quantity = item.Quantity,
-                    unitPrice = item.UnitPrice,
-                    customizations = item.Customizations.Select(c => new
+                var latestPayment = order.Payments?
+                    .Where(p => p.PaymentStatus == PaymentStatus.Success)
+                    .OrderByDescending(p => p.CompletedAt ?? p.CreatedAt)
+                    .Select(p => new
                     {
-                        c.CustomizationOptionID,
-                        optionName = c.CustomizationOption?.Name
-                    }).ToList()
-                }),
-                latestPayment = order.Payments
-    .Where(p => p.PaymentStatus == PaymentStatus.Success)
-    .OrderByDescending(p => p.CompletedAt ?? p.CreatedAt)
-    .Select(p => new
-    {
-        method = p.PaymentMethod,
-        status = p.PaymentStatus.ToString(),
-        amount = p.Amount,
-        paidAt = p.CompletedAt
-    })
-    .FirstOrDefault()
+                        method = p.PaymentMethod,
+                        status = p.PaymentStatus.ToString(),
+                        amount = p.Amount,
+                        paidAt = p.CompletedAt
+                    })
+                    .FirstOrDefault();
 
+                return new
+                {
+                    orderID = order.OrderID,
+                    orderNumber = order.OrderNumber,
+                    createdAt = order.CreatedAt,
+                    closedAt = order.ClosedAt,
+                    tableNo = order.RestaurantTableID,
+                    orderStatus = order.OrderStatus.ToString(),
+                    kitchenStatus = order.KitchenStatus.ToString(),
+                    subtotal = order.Subtotal,
+                    discountAmount = order.DiscountAmount,
+                    cgst = order.CGST,
+                    sgst = order.SGST,
+                    serviceCharge = order.ServiceCharge,
+                    totalAmount = order.TotalAmount,
+                    items = order.OrderItems.Select(item => new
+                    {
+                        orderItemID = item.OrderItemID,
+                        productID = item.ProductID,
+                        productName = item.Product?.ProductName ?? $"Product {item.ProductID}",
+                        quantity = item.Quantity,
+                        unitPrice = item.UnitPrice,
+                        customizations = item.Customizations.Select(c => new
+                        {
+                            c.CustomizationOptionID,
+                            optionName = c.CustomizationOption?.Name
+                        }).ToList()
+                    }),
+                    latestPayment = latestPayment,
+                    paymentType = summary.PaymentType,
+                    paymentMethods = summary.PaymentMethods,
+                    paidAmount = summary.PaidAmount,
+                    remainingAmount = summary.RemainingAmount
+                };
             })
         });
     }
@@ -2894,6 +3401,51 @@ public class OrderController : ControllerBase
         await _context.SaveChangesAsync();
     }
 
+    // Payment summary helper - copy into your controller (private)
+    private (string PaymentType, string PaymentMethods, decimal PaidAmount, decimal RemainingAmount) GetPaymentSummary(Order order)
+    {
+        if (order == null) return ("Pending", "-", 0m, 0m);
+
+        var payments = order.Payments ?? new List<Payment>();
+        var successfulPayments = payments
+            .Where(p => p.PaymentStatus == PaymentStatus.Success)
+            .OrderBy(p => p.CompletedAt ?? p.CreatedAt) // chronological
+            .ToList();
+
+        decimal paidAmount = successfulPayments.Sum(p => p.Amount);
+        decimal remaining = (order.TotalAmount <= 0) ? 0m : Math.Max(order.TotalAmount - paidAmount, 0m);
+
+        string paymentMethods;
+        if (!successfulPayments.Any())
+        {
+            paymentMethods = "-";
+        }
+        else
+        {
+            paymentMethods = string.Join(" + ",
+                successfulPayments
+                    .Select(p => string.IsNullOrWhiteSpace(p.PaymentMethod) ? "Unknown" : p.PaymentMethod)
+                    .Distinct());
+        }
+
+        // Business rule: treat any multi-method payment as PARTIAL for manager visibility,
+        // even if paidAmount == TotalAmount. Single successful payment exactly equal to total => FULL.
+        string paymentType;
+        if (!successfulPayments.Any())
+        {
+            paymentType = "Pending";
+        }
+        else if (successfulPayments.Count == 1 && paidAmount >= order.TotalAmount && order.TotalAmount > 0)
+        {
+            paymentType = "Full";
+        }
+        else
+        {
+            paymentType = "Partial";
+        }
+
+        return (paymentType, paymentMethods, paidAmount, remaining);
+    }
 
     private async Task<RestaurantPrinter?> GetPrinterConfig(
     int restaurantId,
@@ -2905,7 +3457,4 @@ public class OrderController : ControllerBase
                 p.PrinterType == type &&
                 p.IsActive);
     }
-
 }
-
-
