@@ -12,10 +12,14 @@ namespace Restaurant_Menu.Models
         [Required]
         public int ProductID { get; set; }
 
+        public Product? Product { get; set; }   // ADD
+
         [Required]
         public int InventoryItemID { get; set; }
 
-        [Column(TypeName = "decimal(18,3)")]
+        public InventoryItem? InventoryItem { get; set; }  // ADD
+
+        [Column(TypeName = "decimal(18,4)")]
         public decimal QuantityPerUnit { get; set; }
 
         // Multi-tenant

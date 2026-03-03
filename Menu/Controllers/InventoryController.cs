@@ -93,7 +93,148 @@ namespace Restaurant_Menu.Controllers
             var saved = await _inventory.UpsertProductRecipeAsync(recipe);
             return Ok(saved);
         }
+        [HttpGet("analytics/turnover")]
+        public async Task<IActionResult> GetTurnover(
+    [FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
 
+            var result = await _inventory
+                .GetInventoryTurnoverAsync(restaurantId);
+
+            return Ok(result);
+        }
+
+        [HttpGet("analytics/dead-stock")]
+        public async Task<IActionResult> GetDeadStock(
+            [FromQuery] int restaurantId,
+            [FromQuery] int days = 30)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var result = await _inventory
+                .GetDeadStockAsync(restaurantId, days);
+
+            return Ok(result);
+        }
+
+        [HttpGet("analytics/waste")]
+        public async Task<IActionResult> GetWasteAnalytics(
+            [FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var result = await _inventory
+                .GetWasteAnalyticsAsync(restaurantId);
+
+            return Ok(result);
+        }
+        [HttpPost("audit")]
+        public async Task<IActionResult> PerformAudit(
+    [FromQuery] int inventoryItemId,
+    [FromQuery] decimal physicalQuantity,
+    [FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var result = await _inventory.PerformAuditAsync(
+                inventoryItemId,
+                physicalQuantity,
+                restaurantId,
+                User.Identity?.Name ?? "System");
+
+            return Ok(result);
+        }
+
+        [HttpGet("variance-report")]
+        public async Task<IActionResult> GetVarianceReport(
+            [FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var result = await _inventory
+                .GetVarianceReportAsync(restaurantId);
+
+            return Ok(result);
+        }
+        [HttpGet("conversions/{inventoryItemId:int}")]
+        public async Task<IActionResult> GetConversions(
+    int inventoryItemId,
+    [FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var result = await _inventory.GetConversionsAsync(
+                inventoryItemId,
+                restaurantId);
+
+            return Ok(result);
+        }
+
+        [HttpPost("conversions")]
+        public async Task<IActionResult> AddOrUpdateConversion(
+            [FromBody] UnitConversion conversion)
+        {
+            if (conversion.RestaurantID <= 0)
+                return BadRequest("restaurantId required");
+
+            var result = await _inventory
+                .AddOrUpdateConversionAsync(conversion);
+
+            return Ok(result);
+        }
+
+        [HttpDelete("conversions/{id:int}")]
+        public async Task<IActionResult> DeleteConversion(
+            int id,
+            [FromQuery] int restaurantId)
+        {
+            var ok = await _inventory
+                .DeleteConversionAsync(id, restaurantId);
+
+            if (!ok) return NotFound();
+
+            return NoContent();
+        }
+
+        [HttpGet("valuation")]
+        public async Task<IActionResult> GetValuation(
+    [FromQuery] int restaurantId,
+    [FromQuery] DateTime? asOfDate)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId is required");
+
+            var result = await _inventory.GetInventoryValuationAsync(restaurantId, asOfDate);
+            return Ok(result);
+        }
+        [HttpPost("rebuild")]
+        public async Task<IActionResult> RebuildInventory([FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId is required");
+
+            await _inventory.RebuildInventoryAsync(restaurantId);
+            return Ok("Inventory rebuilt successfully.");
+        }
+        [HttpGet("waste-report")]
+        public async Task<IActionResult> GetWasteReport(
+    [FromQuery] int restaurantId,
+    [FromQuery] DateTime? from,
+    [FromQuery] DateTime? to)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId is required");
+
+            var result = await _inventory.GetWasteReportAsync(restaurantId, from, to);
+            return Ok(result);
+        }
         [HttpDelete("recipes/{productRecipeId:int}")]
         public async Task<IActionResult> DeleteRecipe([FromRoute] int productRecipeId, [FromQuery] int restaurantId)
         {

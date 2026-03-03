@@ -96,8 +96,10 @@ namespace Restaurant_Menu.Models
         public decimal RemainingAmount { get; set; } = 0;
         public bool OfferLocked { get; set; } = false;
 
-
+        public bool InventoryProcessed { get; set; } = false;
         public RestaurantTable? RestaurantTable { get; set; }  // <--- THIS
+        [Column(TypeName = "decimal(18,4)")]
+        public decimal CostOfGoodsSold { get; set; } = 0;
 
 
 
