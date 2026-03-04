@@ -2932,13 +2932,12 @@ public class OrderController : ControllerBase
             isFullyPaid = paid >= order.TotalAmount
         });
     }
-
     [HttpPost("{orderId}/print-bill")]
     public async Task<IActionResult> PrintBill(
-    int orderId,
-    [FromQuery] int restaurantId)
+        int orderId,
+        [FromQuery] int restaurantId)
     {
-        // 1️⃣ Fetch order with payments
+        // 1️⃣ Fetch order with items and payments
         var order = await _context.Orders
             .Include(o => o.OrderItems)
                 .ThenInclude(oi => oi.Product)
@@ -2952,7 +2951,19 @@ public class OrderController : ControllerBase
             return NotFound(new { message = "Order not found." });
         }
 
-        // 2️⃣ Calculate total paid (SUPPORTS PARTIAL PAYMENTS)
+        // 🔥 FIX 1: Always recalculate totals before printing
+        _orderRepository.CalculateOrderAmounts(order);
+
+        // 🔥 FIX 2: Ensure best offer applied if not locked
+        if (!order.OfferLocked && order.AppliedOfferID == null)
+        {
+            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            _orderRepository.CalculateOrderAmounts(order);
+        }
+
+        await _context.SaveChangesAsync();
+
+        // 2️⃣ Calculate total paid (supports partial payments)
         var totalPaid = order.Payments
             .Where(p => p.PaymentStatus == PaymentStatus.Success)
             .Sum(p => p.Amount);
@@ -2980,6 +2991,7 @@ public class OrderController : ControllerBase
 
         // 5️⃣ Get BILL printer
         var printer = await GetPrinterConfig(restaurantId, "BILL");
+
         if (printer == null)
         {
             return BadRequest(new
@@ -3022,7 +3034,7 @@ public class OrderController : ControllerBase
             }
         };
 
-        //7️⃣ Send to printer queue
+        // 7️⃣ Send to printer queue
         await SavePrintJob(restaurantId, payload);
 
         // 8️⃣ CLOSE ORDER (FINAL STEP)
