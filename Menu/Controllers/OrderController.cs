@@ -2995,10 +2995,12 @@ public class OrderController : ControllerBase
             RestaurantName = printer.HeaderText,
             RestaurantAddress = printer.Address,
             Footer = printer.FooterText ?? "Thank you, visit again",
+
             Order = new
             {
                 OrderNumber = order.OrderNumber.ToString(),
                 TableNo = order.RestaurantTableID?.ToString() ?? "0",
+
                 Items = order.OrderItems.Select(i => new
                 {
                     Name = i.Product?.ProductName ?? "Item",
@@ -3006,10 +3008,17 @@ public class OrderController : ControllerBase
                     Price = i.UnitPrice,
                     Total = i.Quantity * i.UnitPrice
                 }).ToList(),
-                order.Subtotal,
+
+                Subtotal = order.Subtotal,
                 Discount = order.DiscountAmount,
                 Tax = order.CGST + order.SGST,
+
+                // ⭐ IMPORTANT FIX
+                Total = order.TotalAmount,
+
+                // optional (for debugging / future)
                 GrandTotal = order.TotalAmount,
+
                 PaidAmount = totalPaid
             }
         };
