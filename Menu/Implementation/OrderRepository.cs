@@ -94,39 +94,95 @@ public class OrderRepository : IOrderRepository
     }
 
 
+    //public void CalculateOrderAmounts(Order order)
+    //{
+    //    if (order.OrderItems == null || !order.OrderItems.Any())
+    //    {
+    //        order.Subtotal = 0;
+    //        order.TotalAmount = 0;
+    //        return;
+    //    }
+
+    //    // 1. Calculate Subtotal (Sum of all items)
+    //    // Ensure we use the UnitPrice stored on the record
+    //    order.Subtotal = order.OrderItems.Sum(item =>
+    //        (item.UnitPrice > 0 ? item.UnitPrice : (item.Product?.Price ?? 0)) * item.Quantity
+    //    );
+
+    //    // 2. Calculate Discount (Ensure it doesn't exceed subtotal)
+    //    decimal discount = order.DiscountAmount;
+    //    if (discount > order.Subtotal) discount = order.Subtotal;
+
+    //    decimal taxableAmount = order.Subtotal - discount;
+
+    //    // 3. Calculate Taxes (Assuming 2.5% CGST + 2.5% SGST as standard for restaurants)
+    //    // Only calculate if taxes aren't manually set
+    //    order.CGST = Math.Round(taxableAmount * 0.025m, 2);
+    //    order.SGST = Math.Round(taxableAmount * 0.025m, 2);
+
+    //    // 4. Service Charge (Optional - e.g., 5%)
+    //    order.ServiceCharge = 0;
+
+    //    // 5. Final Grand Total
+    //    order.TotalAmount = taxableAmount + order.CGST + order.SGST + order.ServiceCharge;
+    //}
+    // =========================
+    // PRICE CALCULATOR (FINAL)
+    // =========================
     public void CalculateOrderAmounts(Order order)
     {
+        if (order == null)
+            throw new ArgumentNullException(nameof(order));
+
+        // If there are no items
         if (order.OrderItems == null || !order.OrderItems.Any())
         {
             order.Subtotal = 0;
+            order.DiscountAmount = 0;
+            order.CGST = 0;
+            order.SGST = 0;
+            order.ServiceCharge = 0;
             order.TotalAmount = 0;
             return;
         }
 
-        // 1. Calculate Subtotal (Sum of all items)
-        // Ensure we use the UnitPrice stored on the record
+        // =========================
+        // 1️⃣ CALCULATE SUBTOTAL
+        // =========================
         order.Subtotal = order.OrderItems.Sum(item =>
             (item.UnitPrice > 0 ? item.UnitPrice : (item.Product?.Price ?? 0)) * item.Quantity
         );
 
-        // 2. Calculate Discount (Ensure it doesn't exceed subtotal)
+        order.Subtotal = Math.Round(order.Subtotal, 2);
+
+        // =========================
+        // 2️⃣ APPLY DISCOUNT
+        // =========================
         decimal discount = order.DiscountAmount;
-        if (discount > order.Subtotal) discount = order.Subtotal;
 
-        decimal taxableAmount = order.Subtotal - discount;
+        // Safety check: discount cannot exceed subtotal
+        if (discount > order.Subtotal)
+            discount = order.Subtotal;
 
-        // 3. Calculate Taxes (Assuming 2.5% CGST + 2.5% SGST as standard for restaurants)
-        // Only calculate if taxes aren't manually set
-        order.CGST = Math.Round(taxableAmount * 0.025m, 2);
-        order.SGST = Math.Round(taxableAmount * 0.025m, 2);
+        discount = Math.Round(discount, 2);
 
-        // 4. Service Charge (Optional - e.g., 5%)
+        // =========================
+        // 3️⃣ REMOVE TAXES
+        // =========================
+        order.CGST = 0;
+        order.SGST = 0;
         order.ServiceCharge = 0;
 
-        // 5. Final Grand Total
-        order.TotalAmount = taxableAmount + order.CGST + order.SGST + order.ServiceCharge;
-    }
+        // =========================
+        // 4️⃣ CALCULATE FINAL TOTAL
+        // =========================
+        order.TotalAmount = Math.Round(order.Subtotal - discount, 2);
 
+        // =========================
+        // 5️⃣ UPDATE ORDER
+        // =========================
+        order.DiscountAmount = discount;
+    }
     // ✅ Get order by ID
     public async Task<Order?> GetOrderByIdAsync(int orderId, int restaurantId)
     {
