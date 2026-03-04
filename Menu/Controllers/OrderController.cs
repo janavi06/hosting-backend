@@ -1132,143 +1132,143 @@ public class OrderController : ControllerBase
     }
 
 
-    [HttpGet("{orderId}/bill")]
-    public async Task<IActionResult> DownloadBill(int orderId)
-    {
-        var order = await _context.Orders
-            .Include(o => o.OrderItems)
-              .ThenInclude(oi => oi.Customizations)
-                .ThenInclude(c => c.CustomizationOption)
-                .ThenInclude(oi => oi.Product)
-            .Include(o => o.RestaurantTable)
-            .FirstOrDefaultAsync(o => o.OrderID == orderId);
+    //[HttpGet("{orderId}/bill")]
+    //public async Task<IActionResult> DownloadBill(int orderId)
+    //{
+    //    var order = await _context.Orders
+    //        .Include(o => o.OrderItems)
+    //          .ThenInclude(oi => oi.Customizations)
+    //            .ThenInclude(c => c.CustomizationOption)
+    //            .ThenInclude(oi => oi.Product)
+    //        .Include(o => o.RestaurantTable)
+    //        .FirstOrDefaultAsync(o => o.OrderID == orderId);
 
-        if (order == null)
-            return NotFound();
+    //    if (order == null)
+    //        return NotFound();
 
-        var restaurant = await _context.Restaurants.FirstOrDefaultAsync();
+    //    var restaurant = await _context.Restaurants.FirstOrDefaultAsync();
 
-        _orderRepository.CalculateOrderAmounts(order);
-        //await _orderRepository.ApplyBestAvailableOfferAsync(order);
-        await _context.SaveChangesAsync();
+    //    _orderRepository.CalculateOrderAmounts(order);
+    //    //await _orderRepository.ApplyBestAvailableOfferAsync(order);
+    //    await _context.SaveChangesAsync();
 
-        var pdfBytes = Document.Create(container =>
-        {
-            container.Page(page =>
-            {
-                page.Size(PageSizes.A4);
-                page.Margin(2, QuestPDF.Infrastructure.Unit.Centimetre);
+    //    var pdfBytes = Document.Create(container =>
+    //    {
+    //        container.Page(page =>
+    //        {
+    //            page.Size(PageSizes.A4);
+    //            page.Margin(2, QuestPDF.Infrastructure.Unit.Centimetre);
 
-                page.Header().Column(col =>
-                {
-                    col.Item().AlignCenter().Text(restaurant?.Name ?? "Restaurant Name")
-                        .Bold().FontSize(22);
+    //            page.Header().Column(col =>
+    //            {
+    //                col.Item().AlignCenter().Text(restaurant?.Name ?? "Restaurant Name")
+    //                    .Bold().FontSize(22);
 
-                    if (!string.IsNullOrEmpty(restaurant?.Description))
-                        col.Item().AlignCenter().Text(restaurant.Description).FontSize(12).Italic();
+    //                if (!string.IsNullOrEmpty(restaurant?.Description))
+    //                    col.Item().AlignCenter().Text(restaurant.Description).FontSize(12).Italic();
 
-                    var istTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow,
-                        TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"));
+    //                var istTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow,
+    //                    TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"));
 
-                    col.Item().AlignCenter().Text($"Date: {istTime:dd MMM yyyy | hh:mm tt}")
-                        .FontSize(10).FontColor(Colors.Grey.Darken2);
+    //                col.Item().AlignCenter().Text($"Date: {istTime:dd MMM yyyy | hh:mm tt}")
+    //                    .FontSize(10).FontColor(Colors.Grey.Darken2);
 
-                    col.Item().PaddingVertical(5).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
-                });
+    //                col.Item().PaddingVertical(5).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
+    //            });
 
-                page.Content().Column(column =>
-                {
-                    column.Item().PaddingBottom(10).Text($"Order Number: #{order.OrderNumber}")
-                        .Bold().FontSize(14);
+    //            page.Content().Column(column =>
+    //            {
+    //                column.Item().PaddingBottom(10).Text($"Order Number: #{order.OrderNumber}")
+    //                    .Bold().FontSize(14);
 
-                    column.Item().Table(table =>
-                    {
-                        table.ColumnsDefinition(columns =>
-                        {
-                            columns.ConstantColumn(10, QuestPDF.Infrastructure.Unit.Millimetre);
-                            columns.RelativeColumn(3);
-                            columns.RelativeColumn();
-                            columns.RelativeColumn();
-                            columns.RelativeColumn();
-                        });
+    //                column.Item().Table(table =>
+    //                {
+    //                    table.ColumnsDefinition(columns =>
+    //                    {
+    //                        columns.ConstantColumn(10, QuestPDF.Infrastructure.Unit.Millimetre);
+    //                        columns.RelativeColumn(3);
+    //                        columns.RelativeColumn();
+    //                        columns.RelativeColumn();
+    //                        columns.RelativeColumn();
+    //                    });
 
-                        table.Header(header =>
-                        {
-                            header.Cell().Text("#").Bold();
-                            header.Cell().Text("Item").Bold();
-                            header.Cell().AlignRight().Text("Qty").Bold();
-                            header.Cell().AlignRight().Text("Price").Bold();
-                            header.Cell().AlignRight().Text("Total").Bold();
-                        });
-                        foreach (var (item, index) in order.OrderItems.Select((x, i) => (x, i)))
-                        {
-                            table.Cell().Text($"{index + 1}");
-                            table.Cell().Text(item.Product?.ProductName ?? "Unknown");
+    //                    table.Header(header =>
+    //                    {
+    //                        header.Cell().Text("#").Bold();
+    //                        header.Cell().Text("Item").Bold();
+    //                        header.Cell().AlignRight().Text("Qty").Bold();
+    //                        header.Cell().AlignRight().Text("Price").Bold();
+    //                        header.Cell().AlignRight().Text("Total").Bold();
+    //                    });
+    //                    foreach (var (item, index) in order.OrderItems.Select((x, i) => (x, i)))
+    //                    {
+    //                        table.Cell().Text($"{index + 1}");
+    //                        table.Cell().Text(item.Product?.ProductName ?? "Unknown");
 
-                            if (item.Customizations.Any())
-                            {
-                                var customizationNames = string.Join(", ", item.Customizations.Select(c => c.CustomizationOption.Name));
-                                table.Cell().Text(text =>
-                                {
-                                    text.Span(item.Product?.ProductName ?? "Unknown");
-                                    text.EmptyLine();
-                                    text.Span($"Custom: {customizationNames}").FontColor(Colors.Grey.Medium).FontSize(8);
-                                });
-                            }
-                            else
-                            {
-                                table.Cell().Text(item.Product?.ProductName ?? "Unknown");
-                            }
+    //                        if (item.Customizations.Any())
+    //                        {
+    //                            var customizationNames = string.Join(", ", item.Customizations.Select(c => c.CustomizationOption.Name));
+    //                            table.Cell().Text(text =>
+    //                            {
+    //                                text.Span(item.Product?.ProductName ?? "Unknown");
+    //                                text.EmptyLine();
+    //                                text.Span($"Custom: {customizationNames}").FontColor(Colors.Grey.Medium).FontSize(8);
+    //                            });
+    //                        }
+    //                        else
+    //                        {
+    //                            table.Cell().Text(item.Product?.ProductName ?? "Unknown");
+    //                        }
 
-                            table.Cell().AlignRight().Text(item.Quantity.ToString());
-                            table.Cell().AlignRight().Text($"₹{item.UnitPrice:N2}");
-                            table.Cell().AlignRight().Text($"₹{item.UnitPrice * item.Quantity:N2}");
-                        }
-                    });
+    //                        table.Cell().AlignRight().Text(item.Quantity.ToString());
+    //                        table.Cell().AlignRight().Text($"₹{item.UnitPrice:N2}");
+    //                        table.Cell().AlignRight().Text($"₹{item.UnitPrice * item.Quantity:N2}");
+    //                    }
+    //                });
 
-                    column.Item().PaddingTop(15).AlignRight().Text(text =>
-                    {
-                        text.Span("Subtotal: ").Bold();
-                        text.Span($"₹{order.Subtotal:N2}");
-                        text.EmptyLine();
+    //                column.Item().PaddingTop(15).AlignRight().Text(text =>
+    //                {
+    //                    text.Span("Subtotal: ").Bold();
+    //                    text.Span($"₹{order.Subtotal:N2}");
+    //                    text.EmptyLine();
 
-                        if (order.AppliedOffer != null)
-                        {
-                            text.Span("Discount (");
-                            text.Span(order.AppliedOffer.Description ?? "Offer").Italic();
-                            text.Span("): ").Bold();
-                            text.Span($"- ₹{order.DiscountAmount:N2}");
-                            text.EmptyLine();
-                        }
+    //                    if (order.AppliedOffer != null)
+    //                    {
+    //                        text.Span("Discount (");
+    //                        text.Span(order.AppliedOffer.Description ?? "Offer").Italic();
+    //                        text.Span("): ").Bold();
+    //                        text.Span($"- ₹{order.DiscountAmount:N2}");
+    //                        text.EmptyLine();
+    //                    }
 
-                        text.Span("CGST: ").Bold();
-                        text.Span($"₹{order.CGST:N2}");
-                        text.EmptyLine();
+    //                    text.Span("CGST: ").Bold();
+    //                    text.Span($"₹{order.CGST:N2}");
+    //                    text.EmptyLine();
 
-                        text.Span("SGST: ").Bold();
-                        text.Span($"₹{order.SGST:N2}");
-                        text.EmptyLine();
+    //                    text.Span("SGST: ").Bold();
+    //                    text.Span($"₹{order.SGST:N2}");
+    //                    text.EmptyLine();
 
-                        text.Span("Service Charge: ").Bold();
-                        text.Span($"₹{order.ServiceCharge:N2}");
-                        text.EmptyLine();
+    //                    text.Span("Service Charge: ").Bold();
+    //                    text.Span($"₹{order.ServiceCharge:N2}");
+    //                    text.EmptyLine();
 
-                        text.Span("Total: ").Bold().FontSize(14);
-                        text.Span($"₹{order.TotalAmount:N2}").FontSize(14);
-                    });
-                });
+    //                    text.Span("Total: ").Bold().FontSize(14);
+    //                    text.Span($"₹{order.TotalAmount:N2}").FontSize(14);
+    //                });
+    //            });
 
-                page.Footer().Column(col =>
-                {
-                    col.Item().PaddingBottom(5).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
-                    col.Item().AlignCenter().Text("Thank you for dining with us!").Bold().FontSize(12);
-                    col.Item().AlignCenter().Text("Visit us again.").FontSize(10).Italic();
-                });
-            });
-        }).GeneratePdf();
+    //            page.Footer().Column(col =>
+    //            {
+    //                col.Item().PaddingBottom(5).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
+    //                col.Item().AlignCenter().Text("Thank you for dining with us!").Bold().FontSize(12);
+    //                col.Item().AlignCenter().Text("Visit us again.").FontSize(10).Italic();
+    //            });
+    //        });
+    //    }).GeneratePdf();
 
-        return File(pdfBytes, "application/pdf", $"Bill_Order_{order.OrderNumber}.pdf");
-    }
+    //    return File(pdfBytes, "application/pdf", $"Bill_Order_{order.OrderNumber}.pdf");
+    //}
 
     [HttpPost("call-waiter")]
     public async Task<IActionResult> CallWaiter([FromBody] WaiterRequest request, [FromQuery] int restaurantId)
@@ -2932,90 +2932,73 @@ public class OrderController : ControllerBase
             isFullyPaid = paid >= order.TotalAmount
         });
     }
+
+
     [HttpPost("{orderId}/print-bill")]
-    public async Task<IActionResult> PrintBill(
-        int orderId,
-        [FromQuery] int restaurantId)
+    public async Task<IActionResult> PrintBill(int orderId, [FromQuery] int restaurantId)
     {
-        // 1️⃣ Fetch order with items and payments
+        // 1️⃣ Fetch data with correct Price/Customization loading
         var order = await _context.Orders
-            .Include(o => o.OrderItems)
-                .ThenInclude(oi => oi.Product)
+            .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+            .Include(o => o.OrderItems).ThenInclude(oi => oi.Customizations).ThenInclude(c => c.CustomizationOption)
             .Include(o => o.Payments)
-            .FirstOrDefaultAsync(o =>
-                o.OrderID == orderId &&
-                o.RestaurantID == restaurantId);
+            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
 
         if (order == null)
-        {
             return NotFound(new { message = "Order not found." });
-        }
 
-        // 🔥 FIX 1: Always recalculate totals before printing
+        // 2️⃣ RECALCULATE: Ensure values are fresh and save them
         _orderRepository.CalculateOrderAmounts(order);
 
-        // 🔥 FIX 2: Ensure best offer applied if not locked
         if (!order.OfferLocked && order.AppliedOfferID == null)
         {
             await _orderRepository.ApplyBestAvailableOfferAsync(order);
             _orderRepository.CalculateOrderAmounts(order);
         }
 
+        // Guard against zero totals before printing
+        if (order.TotalAmount <= 0)
+        {
+            return BadRequest(new { message = "❌ Bill total is zero. Verify item prices." });
+        }
+
         await _context.SaveChangesAsync();
 
-        // 2️⃣ Calculate total paid (supports partial payments)
+        // 3️⃣ Verify Payment
         var totalPaid = order.Payments
             .Where(p => p.PaymentStatus == PaymentStatus.Success)
             .Sum(p => p.Amount);
 
-        // 3️⃣ BLOCK PRINT IF PAYMENT NOT COMPLETE
-        if (totalPaid < order.TotalAmount)
+        // Small tolerance (₹1) for decimal rounding issues
+        if (totalPaid < (order.TotalAmount - 1))
         {
             return BadRequest(new
             {
                 message = "❌ Payment pending. Complete full payment before printing bill.",
                 totalAmount = order.TotalAmount,
-                paidAmount = totalPaid,
-                remainingAmount = order.TotalAmount - totalPaid
+                paidAmount = totalPaid
             });
         }
 
-        // 4️⃣ BLOCK DOUBLE PRINT
         if (order.ClosedAt != null)
-        {
-            return BadRequest(new
-            {
-                message = "❌ Bill already printed for this order."
-            });
-        }
+            return BadRequest(new { message = "❌ Bill already printed for this order." });
 
-        // 5️⃣ Get BILL printer
+        // 4️⃣ Get Printer and Build Payload
         var printer = await GetPrinterConfig(restaurantId, "BILL");
-
         if (printer == null)
-        {
-            return BadRequest(new
-            {
-                message = "Bill printer not configured."
-            });
-        }
+            return BadRequest(new { message = "Bill printer not configured." });
 
-        // 6️⃣ Build print payload
         var payload = new
         {
             Type = "BILL",
             PrinterName = printer.PrinterName,
             RestaurantName = printer.HeaderText,
             RestaurantAddress = printer.Address,
-            Footer = string.IsNullOrWhiteSpace(printer.FooterText)
-                ? "Thank you, visit again"
-                : printer.FooterText,
-
+            Footer = printer.FooterText ?? "Thank you, visit again",
             Order = new
             {
                 OrderNumber = order.OrderNumber.ToString(),
                 TableNo = order.RestaurantTableID?.ToString() ?? "0",
-
                 Items = order.OrderItems.Select(i => new
                 {
                     Name = i.Product?.ProductName ?? "Item",
@@ -3023,21 +3006,17 @@ public class OrderController : ControllerBase
                     Price = i.UnitPrice,
                     Total = i.Quantity * i.UnitPrice
                 }).ToList(),
-
-                Subtotal = order.Subtotal,
+                order.Subtotal,
                 Discount = order.DiscountAmount,
-                CGST = order.CGST,
-                SGST = order.SGST,
-                ServiceCharge = order.ServiceCharge,
+                Tax = order.CGST + order.SGST,
                 GrandTotal = order.TotalAmount,
                 PaidAmount = totalPaid
             }
         };
 
-        // 7️⃣ Send to printer queue
+        // 5️⃣ Finalize Order
         await SavePrintJob(restaurantId, payload);
 
-        // 8️⃣ CLOSE ORDER (FINAL STEP)
         order.OrderStatus = OrderStatus.Completed;
         order.ClosedAt = DateTime.UtcNow;
         order.UpdatedAt = DateTime.UtcNow;
@@ -3048,12 +3027,131 @@ public class OrderController : ControllerBase
         {
             success = true,
             message = "✅ Bill printed successfully",
-            orderNumber = order.OrderNumber,
-            totalAmount = order.TotalAmount,
-            paidAmount = totalPaid
+            total = order.TotalAmount
         });
     }
+    [HttpGet("{orderId}/bill")]
+    public async Task<IActionResult> DownloadBill(int orderId)
+    {
+        // 1️⃣ FIX: Use separate paths to load Products and Customizations
+        var order = await _context.Orders
+            .Include(o => o.OrderItems)
+                .ThenInclude(oi => oi.Product) // Path for base item prices
+            .Include(o => o.OrderItems)
+                .ThenInclude(oi => oi.Customizations)
+                    .ThenInclude(c => c.CustomizationOption) // Path for customization prices
+            .Include(o => o.RestaurantTable)
+            .Include(o => o.AppliedOffer)
+            .FirstOrDefaultAsync(o => o.OrderID == orderId);
 
+        if (order == null)
+            return NotFound();
+
+        var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.RestaurantID == order.RestaurantID);
+
+        // 2️⃣ Recalculate and SAVE immediately to ensure DB isn't out of sync
+        _orderRepository.CalculateOrderAmounts(order);
+        await _context.SaveChangesAsync();
+
+        var pdfBytes = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(2, QuestPDF.Infrastructure.Unit.Centimetre);
+
+                page.Header().Column(col =>
+                {
+                    col.Item().AlignCenter().Text(restaurant?.Name ?? "Restaurant Name").Bold().FontSize(22);
+
+                    var istTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow,
+                        TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"));
+
+                    col.Item().AlignCenter().Text($"Date: {istTime:dd MMM yyyy | hh:mm tt}")
+                        .FontSize(10).FontColor(Colors.Grey.Darken2);
+
+                    col.Item().PaddingVertical(5).LineHorizontal(1).LineColor(Colors.Grey.Lighten2);
+                });
+
+                page.Content().Column(column =>
+                {
+                    column.Item().PaddingBottom(10).Text($"Order Number: #{order.OrderNumber}").Bold().FontSize(14);
+
+                    column.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(columns =>
+                        {
+                            columns.ConstantColumn(10, QuestPDF.Infrastructure.Unit.Millimetre);
+                            columns.RelativeColumn(3);
+                            columns.RelativeColumn();
+                            columns.RelativeColumn();
+                            columns.RelativeColumn();
+                        });
+
+                        table.Header(header =>
+                        {
+                            header.Cell().Text("#").Bold();
+                            header.Cell().Text("Item").Bold();
+                            header.Cell().AlignRight().Text("Qty").Bold();
+                            header.Cell().AlignRight().Text("Price").Bold();
+                            header.Cell().AlignRight().Text("Total").Bold();
+                        });
+
+                        foreach (var (item, index) in order.OrderItems.Select((x, i) => (x, i)))
+                        {
+                            table.Cell().Text($"{index + 1}");
+
+                            // Handle item name with customizations
+                            if (item.Customizations.Any())
+                            {
+                                var customizationNames = string.Join(", ", item.Customizations.Select(c => c.CustomizationOption.Name));
+                                table.Cell().Text(text =>
+                                {
+                                    text.Span(item.Product?.ProductName ?? "Unknown Item");
+                                    text.EmptyLine();
+                                    text.Span($"Custom: {customizationNames}").FontColor(Colors.Grey.Medium).FontSize(8);
+                                });
+                            }
+                            else
+                            {
+                                table.Cell().Text(item.Product?.ProductName ?? "Unknown Item");
+                            }
+
+                            table.Cell().AlignRight().Text(item.Quantity.ToString());
+                            table.Cell().AlignRight().Text($"₹{item.UnitPrice:N2}");
+                            table.Cell().AlignRight().Text($"₹{(item.UnitPrice * item.Quantity):N2}");
+                        }
+                    });
+
+                    // Totals Section
+                    column.Item().PaddingTop(15).AlignRight().Text(text =>
+                    {
+                        text.Span("Subtotal: ").Bold();
+                        text.Span($"₹{order.Subtotal:N2}");
+                        text.EmptyLine();
+
+                        if (order.DiscountAmount > 0)
+                        {
+                            text.Span($"Discount ({order.AppliedOffer?.Description ?? "Offer"}): ").Bold();
+                            text.Span($"- ₹{order.DiscountAmount:N2}");
+                            text.EmptyLine();
+                        }
+
+                        text.Span("Taxes (GST): ").Bold();
+                        text.Span($"₹{(order.CGST + order.SGST):N2}");
+                        text.EmptyLine();
+
+                        text.Span("Total: ").Bold().FontSize(14);
+                        text.Span($"₹{order.TotalAmount:N2}").FontSize(14);
+                    });
+                });
+
+                page.Footer().AlignCenter().Text("Thank you! Visit us again.").FontSize(10).Italic();
+            });
+        }).GeneratePdf();
+
+        return File(pdfBytes, "application/pdf", $"Bill_Order_{order.OrderNumber}.pdf");
+    }
     //[HttpPost("{orderId}/print-bill")]
     //public async Task<IActionResult> PrintBill(int orderId, [FromQuery] int restaurantId)
     //{

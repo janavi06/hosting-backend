@@ -89,38 +89,35 @@ public class OrderRepository : IOrderRepository
 
     public void CalculateOrderAmounts(Order order)
     {
-        if (order == null)
-            throw new ArgumentNullException(nameof(order));
-
         if (order.OrderItems == null || !order.OrderItems.Any())
         {
-            order.Subtotal = 0m;
-            order.TotalAmount = 0m;
-            order.DiscountAmount = 0m;
-            order.AppliedOfferID = null;
+            order.Subtotal = 0;
+            order.TotalAmount = 0;
             return;
         }
 
-        // 1️⃣ Subtotal
-        order.Subtotal = order.OrderItems.Sum(i => i.UnitPrice * i.Quantity);
+        // 1. Calculate Subtotal (Sum of all items)
+        // Ensure we use the UnitPrice stored on the record
+        order.Subtotal = order.OrderItems.Sum(item =>
+            (item.UnitPrice > 0 ? item.UnitPrice : (item.Product?.Price ?? 0)) * item.Quantity
+        );
 
-        // 2️⃣ Apply discount (Round discount to 2 decimals)
-        var discountedAmount = Math.Max(0, order.Subtotal - Math.Round(order.DiscountAmount, 2));
+        // 2. Calculate Discount (Ensure it doesn't exceed subtotal)
+        decimal discount = order.DiscountAmount;
+        if (discount > order.Subtotal) discount = order.Subtotal;
 
-        // 3️⃣ Calculate percentage based taxes
-        var cgstAmount = discountedAmount * (order.CGST / 100m);
-        var sgstAmount = discountedAmount * (order.SGST / 100m);
-        var serviceChargeAmount = discountedAmount * (order.ServiceCharge / 100m);
+        decimal taxableAmount = order.Subtotal - discount;
 
-        // 4️⃣ Final total: Round to 0 decimals for whole numbers (recommended for Cash/UPI)
-        // or round to 2 decimals if you strictly accept paise. 
-        // Rounding to 0 makes it ₹319 instead of ₹318.60.
-        order.TotalAmount = Math.Round(
-            discountedAmount +
-            cgstAmount +
-            sgstAmount +
-            serviceChargeAmount,
-            0); // Change to 2 if you want to keep decimals
+        // 3. Calculate Taxes (Assuming 2.5% CGST + 2.5% SGST as standard for restaurants)
+        // Only calculate if taxes aren't manually set
+        order.CGST = Math.Round(taxableAmount * 0.025m, 2);
+        order.SGST = Math.Round(taxableAmount * 0.025m, 2);
+
+        // 4. Service Charge (Optional - e.g., 5%)
+        order.ServiceCharge = 0;
+
+        // 5. Final Grand Total
+        order.TotalAmount = taxableAmount + order.CGST + order.SGST + order.ServiceCharge;
     }
 
     // ✅ Get order by ID
