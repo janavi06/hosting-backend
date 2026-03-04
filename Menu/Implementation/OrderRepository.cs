@@ -16,7 +16,12 @@ public class OrderRepository : IOrderRepository
         _logger = logger;
     }
 
-    private async Task AdjustInventoryForProductAsync(int restaurantId, int productId, int orderId, int quantityDelta, string createdBy)
+    private async Task AdjustInventoryForProductAsync(
+     int restaurantId,
+     int productId,
+     int orderId,
+     int quantityDelta,
+     int createdBy)
     {
         var recipes = await _context.ProductRecipes
             .Where(r => r.ProductID == productId && r.RestaurantID == restaurantId)
@@ -26,12 +31,14 @@ public class OrderRepository : IOrderRepository
         {
             var item = await _context.InventoryItems
                 .FirstOrDefaultAsync(i => i.InventoryItemID == recipe.InventoryItemID && i.RestaurantID == restaurantId);
+
             if (item == null) continue;
 
             var qtyChange = -(recipe.QuantityPerUnit * quantityDelta);
+
             item.CurrentQuantity += qtyChange;
             item.UpdatedAt = DateTime.UtcNow;
-            item.UpdatedBy = createdBy;
+            item.UpdatedBy = createdBy.ToString();   // FIX
 
             _context.StockTransactions.Add(new StockTransaction
             {
@@ -42,13 +49,13 @@ public class OrderRepository : IOrderRepository
                 UnitCost = item.AverageUnitCost,
                 Reference = $"order:{orderId}",
                 Notes = quantityDelta >= 0 ? "Order sale deduction" : "Order item revert",
-                CreatedBy = createdBy,
+                CreatedBy = createdBy.ToString(),    // FIX
                 TransactionTime = DateTime.UtcNow
             });
         }
     }
 
-    
+
     public async Task<IEnumerable<Order>> GetAllOrdersAsync(int restaurantId)
     {
         return await _context.Orders
@@ -178,7 +185,7 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
                 item.ProductID,
                 order.OrderID,
                 item.Quantity,
-                order.CreatedBy ?? "System");
+                order.UserID);
         }
 
         await _context.SaveChangesAsync();
