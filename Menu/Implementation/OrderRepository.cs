@@ -21,7 +21,7 @@ public class OrderRepository : IOrderRepository
      int productId,
      int orderId,
      int quantityDelta,
-     int createdBy)
+     string createdBy)
     {
         var recipes = await _context.ProductRecipes
             .Where(r => r.ProductID == productId && r.RestaurantID == restaurantId)
@@ -38,8 +38,7 @@ public class OrderRepository : IOrderRepository
 
             item.CurrentQuantity += qtyChange;
             item.UpdatedAt = DateTime.UtcNow;
-            item.UpdatedBy = createdBy.ToString();   // FIX
-
+            item.UpdatedBy = createdBy;
             _context.StockTransactions.Add(new StockTransaction
             {
                 InventoryItemID = recipe.InventoryItemID,
@@ -49,7 +48,7 @@ public class OrderRepository : IOrderRepository
                 UnitCost = item.AverageUnitCost,
                 Reference = $"order:{orderId}",
                 Notes = quantityDelta >= 0 ? "Order sale deduction" : "Order item revert",
-                CreatedBy = createdBy.ToString(),    // FIX
+                CreatedBy = createdBy,
                 TransactionTime = DateTime.UtcNow
             });
         }
@@ -241,7 +240,7 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
                 item.ProductID,
                 order.OrderID,
                 item.Quantity,
-                order.UserID);
+                order.CreatedBy ?? "System");
         }
 
         await _context.SaveChangesAsync();
