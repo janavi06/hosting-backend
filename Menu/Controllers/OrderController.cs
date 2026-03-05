@@ -2013,119 +2013,16 @@ public class OrderController : ControllerBase
         }
     }
 
-    //[HttpPost("{orderId}/add-item")]
-    //public async Task<IActionResult> AddItemToOrder(
-    //  int orderId,
-    //  [FromQuery] int restaurantId,
-    //  [FromBody] JsonElement payload)
-    //{
-    //    await using var transaction = await _context.Database.BeginTransactionAsync();
-
-    //    try
-    //    {
-    //        int productId = payload.GetProperty("productID").GetInt32();
-    //        int quantity = payload.GetProperty("quantity").GetInt32();
-
-    //        var customizationIds = payload.TryGetProperty("customizationOptionIds", out var cp)
-    //            ? cp.EnumerateArray().Select(x => x.GetInt32()).ToList()
-    //            : new List<int>();
-
-    //        var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
-
-    //        if (order == null)
-    //            return NotFound();
-
-    //        var unitPrice = await CalculateUnitPriceAsync(
-    //            productId,
-    //            customizationIds,
-    //            restaurantId);
-
-    //        int batchId = order.OrderItems.Any()
-    //            ? order.OrderItems.Max(i => i.BatchID) + 1
-    //            : 1;
-
-    //        var newItem = new OrderItem
-    //        {
-    //            ProductID = productId,
-    //            Quantity = quantity,
-    //            UnitPrice = unitPrice,
-    //            BatchID = batchId,
-    //            RestaurantID = restaurantId,
-    //            IsPrepared = false,
-    //            AddedToKitchenAt = DateTime.UtcNow,
-    //            Customizations = customizationIds
-    //                .Select(id => new OrderItemCustomization
-    //                {
-    //                    CustomizationOptionID = id,
-    //                    RestaurantID = restaurantId
-    //                }).ToList()
-    //        };
-
-    //        order.OrderItems.Add(newItem);
-
-    //        order.KitchenStatus = KitchenStatus.Pending;
-
-    //        _orderRepository.CalculateOrderAmounts(order);
-
-    //        if (!order.OfferLocked && order.AppliedOfferID == null)
-    //            await _orderRepository.ApplyBestAvailableOfferAsync(order);
-
-    //        _orderRepository.CalculateOrderAmounts(order);
-
-    //        await _context.SaveChangesAsync();
-
-    //        // 🔥 INVENTORY FIX
-    //        if (order.OrderStatus == OrderStatus.Confirmed)
-    //        {
-    //            var tempOrder = new Order
-    //            {
-    //                OrderID = order.OrderID,
-    //                OrderNumber = order.OrderNumber,
-    //                RestaurantID = order.RestaurantID,
-    //                OrderItems = new List<OrderItem>
-    //            {
-    //                new OrderItem
-    //                {
-    //                    ProductID = newItem.ProductID,
-    //                    Quantity = newItem.Quantity
-    //                }
-    //            }
-    //            };
-
-    //            await _inventoryRepository.DeductInventoryForOrderAsync(
-    //                tempOrder,
-    //                $"ORDER-{order.OrderNumber}-ADD",
-    //                order.UpdatedBy ?? "System"
-    //            );
-    //        }
-
-    //        await transaction.CommitAsync();
-
-    //        return Ok(new
-    //        {
-    //            message = "Item added successfully",
-    //            newTotal = order.TotalAmount
-    //        });
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        await transaction.RollbackAsync();
-    //        _logger.LogError(ex, "AddItemToOrder failed");
-
-    //        return StatusCode(500, "Failed to add item");
-    //    }
-    //}
     [HttpPost("{orderId}/add-item")]
     public async Task<IActionResult> AddItemToOrder(
-    int orderId,
-    [FromQuery] int restaurantId,
-    [FromBody] JsonElement payload)
+      int orderId,
+      [FromQuery] int restaurantId,
+      [FromBody] JsonElement payload)
     {
         await using var transaction = await _context.Database.BeginTransactionAsync();
 
         try
         {
-            // 1️⃣ Extract payload
             int productId = payload.GetProperty("productID").GetInt32();
             int quantity = payload.GetProperty("quantity").GetInt32();
 
@@ -2133,72 +2030,41 @@ public class OrderController : ControllerBase
                 ? cp.EnumerateArray().Select(x => x.GetInt32()).ToList()
                 : new List<int>();
 
-            // 2️⃣ Fetch order WITH full navigation properties
-            var order = await _context.Orders
-                .Include(o => o.OrderItems)
-                    .ThenInclude(oi => oi.Product)
-                .Include(o => o.OrderItems)
-                    .ThenInclude(oi => oi.Customizations)
-                        .ThenInclude(c => c.CustomizationOption)
-                .FirstOrDefaultAsync(o =>
-                    o.OrderID == orderId &&
-                    o.RestaurantID == restaurantId);
+            var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
 
             if (order == null)
-                return NotFound(new { message = "Order not found." });
+                return NotFound();
 
-            // 3️⃣ Calculate price including customizations
             var unitPrice = await CalculateUnitPriceAsync(
                 productId,
                 customizationIds,
                 restaurantId);
 
-            // 4️⃣ Create new BatchID
             int batchId = order.OrderItems.Any()
                 ? order.OrderItems.Max(i => i.BatchID) + 1
                 : 1;
 
-            // 5️⃣ Fetch product (to avoid null names)
-            var product = await _context.Products
-                .FirstOrDefaultAsync(p =>
-                    p.ProductID == productId &&
-                    p.RestaurantID == restaurantId);
-
-            if (product == null)
-                return BadRequest("Invalid product.");
-
-            // 6️⃣ Fetch customization options (for printer)
-            var customizationOptions = await _context.CustomizationOptions
-                .Where(c =>
-                    customizationIds.Contains(c.CustomizationOptionID) &&
-                    c.RestaurantID == restaurantId)
-                .ToListAsync();
-
-            // 7️⃣ Create new order item
             var newItem = new OrderItem
             {
                 ProductID = productId,
-                Product = product,
                 Quantity = quantity,
                 UnitPrice = unitPrice,
                 BatchID = batchId,
                 RestaurantID = restaurantId,
                 IsPrepared = false,
                 AddedToKitchenAt = DateTime.UtcNow,
-                Customizations = customizationOptions.Select(c => new OrderItemCustomization
-                {
-                    CustomizationOptionID = c.CustomizationOptionID,
-                    CustomizationOption = c,
-                    RestaurantID = restaurantId
-                }).ToList()
+                Customizations = customizationIds
+                    .Select(id => new OrderItemCustomization
+                    {
+                        CustomizationOptionID = id,
+                        RestaurantID = restaurantId
+                    }).ToList()
             };
 
             order.OrderItems.Add(newItem);
 
-            // 8️⃣ Reset kitchen status
             order.KitchenStatus = KitchenStatus.Pending;
 
-            // 9️⃣ Recalculate totals
             _orderRepository.CalculateOrderAmounts(order);
 
             if (!order.OfferLocked && order.AppliedOfferID == null)
@@ -2208,7 +2074,7 @@ public class OrderController : ControllerBase
 
             await _context.SaveChangesAsync();
 
-            // 🔟 Deduct inventory if confirmed
+            // 🔥 INVENTORY FIX
             if (order.OrderStatus == OrderStatus.Confirmed)
             {
                 var tempOrder = new Order
@@ -2220,8 +2086,8 @@ public class OrderController : ControllerBase
                 {
                     new OrderItem
                     {
-                        ProductID = productId,
-                        Quantity = quantity
+                        ProductID = newItem.ProductID,
+                        Quantity = newItem.Quantity
                     }
                 }
                 };
@@ -2235,61 +2101,195 @@ public class OrderController : ControllerBase
 
             await transaction.CommitAsync();
 
-            // 🔥 1️⃣1️⃣ PRINT KOT ONLY FOR THIS BATCH
-            if (order.OrderStatus == OrderStatus.Confirmed)
-            {
-                var printer = await GetPrinterConfig(restaurantId, "KOT");
-
-                if (printer != null)
-                {
-                    var batchItems = order.OrderItems
-                        .Where(i => i.BatchID == batchId)
-                        .ToList();
-
-                    var payloadToPrint = new
-                    {
-                        Type = "KOT",
-                        PrinterName = printer.PrinterName,
-                        RestaurantName = printer.HeaderText,
-                        RestaurantAddress = printer.Address,
-                        Footer = printer.FooterText ?? "",
-
-                        Order = new
-                        {
-                            OrderNumber = order.OrderNumber.ToString(),
-                            TableNo = order.RestaurantTableID?.ToString() ?? "0",
-                            BatchID = batchId,
-
-                            Items = batchItems.Select(i => new
-                            {
-                                Name = i.Product?.ProductName ?? "Item",
-                                Qty = i.Quantity,
-                                Modifiers = i.Customizations
-                                    .Select(c => c.CustomizationOption?.Name)
-                                    .Where(x => !string.IsNullOrEmpty(x))
-                                    .ToList()
-                            }).ToList()
-                        }
-                    };
-
-                    await SavePrintJob(restaurantId, payloadToPrint);
-                }
-            }
-
             return Ok(new
             {
                 message = "Item added successfully",
-                newTotal = order.TotalAmount,
-                batchId = batchId
+                newTotal = order.TotalAmount
             });
         }
         catch (Exception ex)
         {
             await transaction.RollbackAsync();
             _logger.LogError(ex, "AddItemToOrder failed");
+
             return StatusCode(500, "Failed to add item");
         }
     }
+    //[HttpPost("{orderId}/add-item")]
+    //public async Task<IActionResult> AddItemToOrder(
+    //int orderId,
+    //[FromQuery] int restaurantId,
+    //[FromBody] JsonElement payload)
+    //{
+    //    await using var transaction = await _context.Database.BeginTransactionAsync();
+
+    //    try
+    //    {
+    //        // 1️⃣ Extract payload
+    //        int productId = payload.GetProperty("productID").GetInt32();
+    //        int quantity = payload.GetProperty("quantity").GetInt32();
+
+    //        var customizationIds = payload.TryGetProperty("customizationOptionIds", out var cp)
+    //            ? cp.EnumerateArray().Select(x => x.GetInt32()).ToList()
+    //            : new List<int>();
+
+    //        // 2️⃣ Fetch order WITH full navigation properties
+    //        var order = await _context.Orders
+    //            .Include(o => o.OrderItems)
+    //                .ThenInclude(oi => oi.Product)
+    //            .Include(o => o.OrderItems)
+    //                .ThenInclude(oi => oi.Customizations)
+    //                    .ThenInclude(c => c.CustomizationOption)
+    //            .FirstOrDefaultAsync(o =>
+    //                o.OrderID == orderId &&
+    //                o.RestaurantID == restaurantId);
+
+    //        if (order == null)
+    //            return NotFound(new { message = "Order not found." });
+
+    //        // 3️⃣ Calculate price including customizations
+    //        var unitPrice = await CalculateUnitPriceAsync(
+    //            productId,
+    //            customizationIds,
+    //            restaurantId);
+
+    //        // 4️⃣ Create new BatchID
+    //        int batchId = order.OrderItems.Any()
+    //            ? order.OrderItems.Max(i => i.BatchID) + 1
+    //            : 1;
+
+    //        // 5️⃣ Fetch product (to avoid null names)
+    //        var product = await _context.Products
+    //            .FirstOrDefaultAsync(p =>
+    //                p.ProductID == productId &&
+    //                p.RestaurantID == restaurantId);
+
+    //        if (product == null)
+    //            return BadRequest("Invalid product.");
+
+    //        // 6️⃣ Fetch customization options (for printer)
+    //        var customizationOptions = await _context.CustomizationOptions
+    //            .Where(c =>
+    //                customizationIds.Contains(c.CustomizationOptionID) &&
+    //                c.RestaurantID == restaurantId)
+    //            .ToListAsync();
+
+    //        // 7️⃣ Create new order item
+    //        var newItem = new OrderItem
+    //        {
+    //            ProductID = productId,
+    //            Product = product,
+    //            Quantity = quantity,
+    //            UnitPrice = unitPrice,
+    //            BatchID = batchId,
+    //            RestaurantID = restaurantId,
+    //            IsPrepared = false,
+    //            AddedToKitchenAt = DateTime.UtcNow,
+    //            Customizations = customizationOptions.Select(c => new OrderItemCustomization
+    //            {
+    //                CustomizationOptionID = c.CustomizationOptionID,
+    //                CustomizationOption = c,
+    //                RestaurantID = restaurantId
+    //            }).ToList()
+    //        };
+
+    //        order.OrderItems.Add(newItem);
+
+    //        // 8️⃣ Reset kitchen status
+    //        order.KitchenStatus = KitchenStatus.Pending;
+
+    //        // 9️⃣ Recalculate totals
+    //        _orderRepository.CalculateOrderAmounts(order);
+
+    //        if (!order.OfferLocked && order.AppliedOfferID == null)
+    //            await _orderRepository.ApplyBestAvailableOfferAsync(order);
+
+    //        _orderRepository.CalculateOrderAmounts(order);
+
+    //        await _context.SaveChangesAsync();
+
+    //        // 🔟 Deduct inventory if confirmed
+    //        if (order.OrderStatus == OrderStatus.Confirmed)
+    //        {
+    //            var tempOrder = new Order
+    //            {
+    //                OrderID = order.OrderID,
+    //                OrderNumber = order.OrderNumber,
+    //                RestaurantID = order.RestaurantID,
+    //                OrderItems = new List<OrderItem>
+    //            {
+    //                new OrderItem
+    //                {
+    //                    ProductID = productId,
+    //                    Quantity = quantity
+    //                }
+    //            }
+    //            };
+
+    //            await _inventoryRepository.DeductInventoryForOrderAsync(
+    //                tempOrder,
+    //                $"ORDER-{order.OrderNumber}-ADD",
+    //                order.UpdatedBy ?? "System"
+    //            );
+    //        }
+
+    //        await transaction.CommitAsync();
+
+    //        // 🔥 1️⃣1️⃣ PRINT KOT ONLY FOR THIS BATCH
+    //        if (order.OrderStatus == OrderStatus.Confirmed)
+    //        {
+    //            var printer = await GetPrinterConfig(restaurantId, "KOT");
+
+    //            if (printer != null)
+    //            {
+    //                var batchItems = order.OrderItems
+    //                    .Where(i => i.BatchID == batchId)
+    //                    .ToList();
+
+    //                var payloadToPrint = new
+    //                {
+    //                    Type = "KOT",
+    //                    PrinterName = printer.PrinterName,
+    //                    RestaurantName = printer.HeaderText,
+    //                    RestaurantAddress = printer.Address,
+    //                    Footer = printer.FooterText ?? "",
+
+    //                    Order = new
+    //                    {
+    //                        OrderNumber = order.OrderNumber.ToString(),
+    //                        TableNo = order.RestaurantTableID?.ToString() ?? "0",
+    //                        BatchID = batchId,
+
+    //                        Items = batchItems.Select(i => new
+    //                        {
+    //                            Name = i.Product?.ProductName ?? "Item",
+    //                            Qty = i.Quantity,
+    //                            Modifiers = i.Customizations
+    //                                .Select(c => c.CustomizationOption?.Name)
+    //                                .Where(x => !string.IsNullOrEmpty(x))
+    //                                .ToList()
+    //                        }).ToList()
+    //                    }
+    //                };
+
+    //                await SavePrintJob(restaurantId, payloadToPrint);
+    //            }
+    //        }
+
+    //        return Ok(new
+    //        {
+    //            message = "Item added successfully",
+    //            newTotal = order.TotalAmount,
+    //            batchId = batchId
+    //        });
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        await transaction.RollbackAsync();
+    //        _logger.LogError(ex, "AddItemToOrder failed");
+    //        return StatusCode(500, "Failed to add item");
+    //    }
+    //}
     [HttpDelete("{orderId}/cancel")]
     public async Task<IActionResult> CancelOrder(
     int orderId,
