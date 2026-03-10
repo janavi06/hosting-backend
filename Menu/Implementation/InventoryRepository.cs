@@ -144,23 +144,25 @@ namespace Restaurant_Menu.Repositories
 
             _context.StockTransactions.Add(tx);
 
+            // 🔔 LOW STOCK ALERT CHECK
+            await CheckLowStockAsync(item);
+
             try
             {
                 await _context.SaveChangesAsync();
             }
             catch (DbUpdateConcurrencyException)
             {
-                // Concurrency handled at higher level if needed
-                throw new InvalidOperationException("Inventory was updated by another process. Please refresh and retry.");
+                throw new InvalidOperationException(
+                    "Inventory was updated by another process. Please refresh and retry.");
             }
 
             return tx;
         }
-
         public async Task DeductInventoryForOrderAsync(
-    Order order,
-    string reference,
-    string? createdBy = null)
+        Order order,
+        string reference,
+        string? createdBy = null)
         {
             if (order == null || order.OrderItems == null || !order.OrderItems.Any())
                 return;
@@ -168,7 +170,6 @@ namespace Restaurant_Menu.Repositories
             if (string.IsNullOrWhiteSpace(reference))
                 throw new ArgumentException("Reference is required.");
 
-            // 1️⃣ Load order from DB
             var dbOrder = await _context.Orders
                 .FirstOrDefaultAsync(o => o.OrderID == order.OrderID);
 
@@ -177,7 +178,6 @@ namespace Restaurant_Menu.Repositories
 
             var restaurantId = dbOrder.RestaurantID;
 
-            // 2️⃣ Idempotency protection
             var alreadyDeducted = await _context.StockTransactions
                 .AnyAsync(t =>
                     t.Reference == reference &&
@@ -187,7 +187,6 @@ namespace Restaurant_Menu.Repositories
             if (alreadyDeducted || dbOrder.InventoryProcessed)
                 return;
 
-            // 3️⃣ Load recipes
             var productIds = order.OrderItems
                 .Select(o => o.ProductID)
                 .Distinct()
@@ -202,7 +201,6 @@ namespace Restaurant_Menu.Repositories
             if (!recipes.Any())
                 return;
 
-            // 4️⃣ Calculate required quantities
             var requiredMap = new Dictionary<int, decimal>();
 
             foreach (var item in order.OrderItems)
@@ -221,7 +219,6 @@ namespace Restaurant_Menu.Repositories
                 }
             }
 
-            // 5️⃣ Load inventory items
             var inventoryItems = await _context.InventoryItems
                 .Where(i =>
                     requiredMap.Keys.Contains(i.InventoryItemID) &&
@@ -231,7 +228,6 @@ namespace Restaurant_Menu.Repositories
 
             decimal totalCOGS = 0;
 
-            // 6️⃣ Deduct inventory
             foreach (var kv in requiredMap)
             {
                 var inv = inventoryItems
@@ -263,14 +259,22 @@ namespace Restaurant_Menu.Repositories
                     RestaurantID = restaurantId,
                     CreatedBy = createdBy
                 });
+
+                // 🔔 LOW STOCK CHECK
+                await CheckLowStockAsync(inv);
             }
 
-            // 7️⃣ Mark processed
             dbOrder.CostOfGoodsSold = totalCOGS;
             dbOrder.InventoryProcessed = true;
 
             await _context.SaveChangesAsync();
         }
+
+
+
+
+
+
 
         // Reverse inventory for an order (repository must not create transactions)
         public async Task ReverseInventoryForOrderAsync(Order order)
@@ -508,11 +512,11 @@ namespace Restaurant_Menu.Repositories
         }
 
         public async Task RestockInventoryAsync(
-            int inventoryItemId,
-            decimal quantity,
-            decimal unitCost,
-            int restaurantId,
-            string? createdBy)
+          int inventoryItemId,
+          decimal quantity,
+          decimal unitCost,
+          int restaurantId,
+          string? createdBy)
         {
             var item = await _context.InventoryItems
                 .FirstOrDefaultAsync(i =>
@@ -548,16 +552,41 @@ namespace Restaurant_Menu.Repositories
                 Reference = $"RESTOCK-{inventoryItemId}-{DateTime.UtcNow:yyyyMMddHHmmss}"
             });
 
+            // ✅ RESTOCK RESOLVES LOW STOCK ALERT
+            await ResolveAlertsAsync(inventoryItemId, restaurantId);
+
             try
             {
                 await _context.SaveChangesAsync();
             }
             catch (DbUpdateConcurrencyException)
             {
-                throw new InvalidOperationException("Stock was modified by another process. Please retry.");
+                throw new InvalidOperationException(
+                    "Stock was modified by another process. Please retry.");
             }
         }
+        private async Task ResolveAlertsAsync(int inventoryItemId, int restaurantId)
+        {
+            var alerts = await _context.InventoryAlerts
+                .Where(a =>
+                    a.InventoryItemID == inventoryItemId &&
+                    a.RestaurantID == restaurantId &&
+                    !a.IsResolved)
+                .ToListAsync();
 
+            foreach (var alert in alerts)
+                alert.IsResolved = true;
+
+            await _context.SaveChangesAsync();
+        }
+        public async Task<IEnumerable<InventoryAlert>> GetInventoryAlertsAsync(int restaurantId)
+        {
+            return await _context.InventoryAlerts
+                .Where(a => a.RestaurantID == restaurantId && !a.IsResolved)
+                .Include(a => a.InventoryItem)
+                .OrderByDescending(a => a.CreatedAt)
+                .ToListAsync();
+        }
         public async Task<IEnumerable<StockTransaction>> GetTransactionsAsync(int restaurantId, int? itemId = null, DateTime? from = null, DateTime? to = null)
         {
             var q = _context.StockTransactions.AsNoTracking().Where(x => x.RestaurantID == restaurantId);
@@ -775,7 +804,36 @@ namespace Restaurant_Menu.Repositories
                 .Where(r => r.ProductID == productId && r.RestaurantID == restaurantId)
                 .ToListAsync();
         }
+        private async Task CheckLowStockAsync(InventoryItem item)
+        {
+            if (item.CurrentQuantity > item.ReorderLevel)
+                return;
 
+            string alertType = "LOW_STOCK";
+
+            if (item.CurrentQuantity <= 0)
+                alertType = "OUT_OF_STOCK";
+            else if (item.CurrentQuantity <= item.ReorderLevel * 0.5m)
+                alertType = "CRITICAL";
+
+            var existingAlert = await _context.InventoryAlerts
+                .FirstOrDefaultAsync(a =>
+                    a.InventoryItemID == item.InventoryItemID &&
+                    !a.IsResolved &&
+                    a.RestaurantID == item.RestaurantID);
+
+            if (existingAlert != null)
+                return;
+
+            _context.InventoryAlerts.Add(new InventoryAlert
+            {
+                InventoryItemID = item.InventoryItemID,
+                AlertType = alertType,
+                CurrentQuantity = item.CurrentQuantity,
+                ReorderLevel = item.ReorderLevel,
+                RestaurantID = item.RestaurantID
+            });
+        }
         public async Task<ProductRecipe> UpsertProductRecipeAsync(ProductRecipe recipe)
         {
             var existing = await _context.ProductRecipes.FirstOrDefaultAsync(r => r.ProductID == recipe.ProductID && r.InventoryItemID == recipe.InventoryItemID && r.RestaurantID == recipe.RestaurantID);

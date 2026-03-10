@@ -38,7 +38,7 @@ namespace Restaurant_Menu.Interface
     decimal physicalQuantity,
     int restaurantId,
     string? createdBy);
-
+        Task<IEnumerable<InventoryAlert>> GetInventoryAlertsAsync(int restaurantId);
         Task<IEnumerable<object>> GetVarianceReportAsync(int restaurantId);
         Task<object> GetInventoryTurnoverAsync(int restaurantId);
         Task<IEnumerable<object>> GetDeadStockAsync(int restaurantId, int days);

@@ -31,7 +31,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<OfferProduct> OfferProducts { get; set; } = null!;
 
 
-
+    public DbSet<InventoryAlert> InventoryAlerts { get; set; }
     // NEW: Expense Tracking DbSets
     public DbSet<Expense> Expenses { get; set; }
     public DbSet<Budget> Budgets { get; set; }

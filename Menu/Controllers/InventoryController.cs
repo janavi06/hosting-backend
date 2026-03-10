@@ -214,6 +214,16 @@ namespace Restaurant_Menu.Controllers
             var result = await _inventory.GetInventoryValuationAsync(restaurantId, asOfDate);
             return Ok(result);
         }
+        [HttpGet("alerts")]
+        public async Task<IActionResult> GetAlerts([FromQuery] int restaurantId)
+        {
+            if (restaurantId <= 0)
+                return BadRequest("restaurantId required");
+
+            var alerts = await _inventory.GetInventoryAlertsAsync(restaurantId);
+
+            return Ok(alerts);
+        }
         [HttpPost("rebuild")]
         public async Task<IActionResult> RebuildInventory([FromQuery] int restaurantId)
         {

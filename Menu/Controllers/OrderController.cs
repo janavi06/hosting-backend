@@ -3285,7 +3285,62 @@ public class OrderController : ControllerBase
 
 
 
+    [HttpPost("{orderId}/print-preview")]
+    public async Task<IActionResult> PrintPreviewBill(
+    int orderId,
+    [FromQuery] int restaurantId)
+    {
+        var order = await _context.Orders
+            .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+            .Include(o => o.OrderItems).ThenInclude(oi => oi.Customizations)
+            .ThenInclude(c => c.CustomizationOption)
+            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
 
+        if (order == null)
+            return NotFound("Order not found");
+
+        _orderRepository.CalculateOrderAmounts(order);
+
+        var printer = await GetPrinterConfig(restaurantId, "BILL");
+
+        if (printer == null)
+            return BadRequest("Bill printer not configured");
+
+        var payload = new
+        {
+            Type = "PREVIEW_BILL",
+            PrinterName = printer.PrinterName,
+            RestaurantName = printer.HeaderText,
+            RestaurantAddress = printer.Address,
+            Footer = printer.FooterText ?? "",
+
+            Order = new
+            {
+                OrderNumber = order.OrderNumber.ToString(),
+                TableNo = order.RestaurantTableID?.ToString() ?? "0",
+
+                Items = order.OrderItems.Select(i => new
+                {
+                    Name = i.Product?.ProductName ?? "Item",
+                    Qty = i.Quantity,
+                    Price = i.UnitPrice,
+                    Total = i.Quantity * i.UnitPrice
+                }).ToList(),
+
+                Subtotal = order.Subtotal,
+                Discount = order.DiscountAmount,
+                Tax = order.CGST + order.SGST,
+                Total = order.TotalAmount
+            }
+        };
+
+        await SavePrintJob(restaurantId, payload);
+
+        return Ok(new
+        {
+            message = "Preview bill printed"
+        });
+    }
 
 
 
@@ -3983,7 +4038,7 @@ public class OrderController : ControllerBase
         {
             RestaurantID = restaurantId,
             PayloadJson = JsonConvert.SerializeObject(payload),
-            Status = "PENDING",
+            Status = "Pending",   // FIX
             CreatedAt = DateTime.UtcNow
         });
 
