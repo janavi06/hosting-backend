@@ -225,12 +225,12 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
         await _context.SaveChangesAsync(); // OrderID generated safely
 
         // 🔥 STEP 2 — Apply offer AFTER insert
-        if (!order.OfferLocked && order.AppliedOfferID == null)
-        {
-            await ApplyBestAvailableOfferAsync(order);
-            CalculateOrderAmounts(order);
-            await _context.SaveChangesAsync();
-        }
+        //if (!order.OfferLocked && order.AppliedOfferID == null)
+        //{
+        //    await ApplyBestAvailableOfferAsync(order);
+        //    CalculateOrderAmounts(order);
+        //    await _context.SaveChangesAsync();
+        //}
 
         // 🔥 STEP 3 — Inventory adjustment
         foreach (var item in order.OrderItems)
@@ -569,11 +569,11 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
         // ✅ Recalculate offers and totals
         CalculateOrderAmounts(order);
 
-        if (!order.OfferLocked && order.OrderStatus == OrderStatus.Pending)
-        {
-            await ApplyBestAvailableOfferAsync(order);
-            CalculateOrderAmounts(order);
-        }
+        //if (!order.OfferLocked && order.OrderStatus == OrderStatus.Pending)
+        //{
+        //    await ApplyBestAvailableOfferAsync(order);
+        //    CalculateOrderAmounts(order);
+        //}
 
 
         await _context.SaveChangesAsync();
@@ -643,11 +643,11 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
 
             CalculateOrderAmounts(order);
 
-            if (!order.OfferLocked && order.OrderStatus == OrderStatus.Pending)
-            {
-                await ApplyBestAvailableOfferAsync(order);
-                CalculateOrderAmounts(order);
-            }
+            //if (!order.OfferLocked && order.OrderStatus == OrderStatus.Pending)
+            //{
+            //    await ApplyBestAvailableOfferAsync(order);
+            //    CalculateOrderAmounts(order);
+            //}
 
 
 
@@ -656,118 +656,123 @@ private async Task<int> GetNextOrderNumberAsync(int restaurantId)
 
         return order;
     }
-    public async Task ApplyBestAvailableOfferAsync(Order order)
-    {
-        if (order == null)
-            return;
+    //public async Task ApplyBestAvailableOfferAsync(Order order)
+    //{
+    //    if (order == null)
+    //        return;
 
-        // 🔒 Offer should only be dynamic in Pending state
-        if (order.OfferLocked || order.OrderStatus != OrderStatus.Pending)
-            return;
+    //    // 🔒 Offer should only be dynamic in Pending state
+    //    if (order.OfferLocked || order.OrderStatus != OrderStatus.Pending)
+    //        return;
 
 
-        // If no items, reset everything safely
-        if (order.OrderItems == null || !order.OrderItems.Any())
-        {
-            order.DiscountAmount = 0;
-            order.AppliedOfferID = null;
-            return;
-        }
+    //    // If no items, reset everything safely
+    //    if (order.OrderItems == null || !order.OrderItems.Any())
+    //    {
+    //        order.DiscountAmount = 0;
+    //        order.AppliedOfferID = null;
+    //        return;
+    //    }
 
-        var now = DateTime.UtcNow;
+    //    var now = DateTime.UtcNow;
 
-        var offers = await _context.Offers
-            .Include(o => o.OfferProducts)
-            .Where(o =>
-                o.RestaurantID == order.RestaurantID &&   // 🔐 restaurant safety
-                o.IsActive &&
-                o.ValidFrom <= now &&
-                o.ValidTo >= now)
-            .OrderByDescending(o => o.Priority)
-            .ToListAsync();
+    //    var offers = await _context.Offers
+    //        .Include(o => o.OfferProducts)
+    //        .Where(o =>
+    //            o.RestaurantID == order.RestaurantID &&   // 🔐 restaurant safety
+    //            o.IsActive &&
+    //            o.ValidFrom <= now &&
+    //            o.ValidTo >= now)
+    //        .OrderByDescending(o => o.Priority)
+    //        .ToListAsync();
 
-        decimal bestDiscount = 0m;
-        Offer? bestOffer = null;
+    //    decimal bestDiscount = 0m;
+    //    Offer? bestOffer = null;
 
-        foreach (var offer in offers)
-        {
-            decimal discount = 0m;
+    //    foreach (var offer in offers)
+    //    {
+    //        decimal discount = 0m;
 
-            // GLOBAL
-            if (offer.Scope.Equals("GLOBAL", StringComparison.OrdinalIgnoreCase))
-            {
-                discount = CalculateDiscount(order.Subtotal, offer);
-            }
+    //        // GLOBAL
+    //        if (offer.Scope.Equals("GLOBAL", StringComparison.OrdinalIgnoreCase))
+    //        {
+    //            discount = CalculateDiscount(order.Subtotal, offer);
+    //        }
 
-            // MIN BILL
-            else if (offer.Scope.Equals("MIN_BILL", StringComparison.OrdinalIgnoreCase)
-                     && order.Subtotal >= offer.MinBillAmount)
-            {
-                discount = CalculateDiscount(order.Subtotal, offer);
-            }
+    //        // MIN BILL
+    //        else if (offer.Scope.Equals("MIN_BILL", StringComparison.OrdinalIgnoreCase)
+    //                 && order.Subtotal >= offer.MinBillAmount)
+    //        {
+    //            discount = CalculateDiscount(order.Subtotal, offer);
+    //        }
 
-            // PRODUCT BASED
-            else if (offer.Scope.Equals("PRODUCT_BASED", StringComparison.OrdinalIgnoreCase))
-            {
-                var productIds = offer.OfferProducts
-                    .Select(p => p.ProductID)
-                    .ToList();
+    //        // PRODUCT BASED
+    //        else if (offer.Scope.Equals("PRODUCT_BASED", StringComparison.OrdinalIgnoreCase))
+    //        {
+    //            var productIds = offer.OfferProducts
+    //                .Select(p => p.ProductID)
+    //                .ToList();
 
-                var applicableAmount = order.OrderItems
-                    .Where(i => productIds.Contains(i.ProductID))
-                    .Sum(i => i.UnitPrice * i.Quantity);
+    //            var applicableAmount = order.OrderItems
+    //                .Where(i => productIds.Contains(i.ProductID))
+    //                .Sum(i => i.UnitPrice * i.Quantity);
 
-                discount = CalculateDiscount(applicableAmount, offer);
-            }
+    //            discount = CalculateDiscount(applicableAmount, offer);
+    //        }
 
-            if (discount > bestDiscount)
-            {
-                bestDiscount = discount;
-                bestOffer = offer;
-            }
-        }
+    //        if (discount > bestDiscount)
+    //        {
+    //            bestDiscount = discount;
+    //            bestOffer = offer;
+    //        }
+    //    }
 
-        // 🔥 SAFETY CHECK BEFORE ASSIGNING FK
-        if (bestOffer != null)
-        {
-            var offerExists = await _context.Offers
-                .AnyAsync(o =>
-                    o.OfferID == bestOffer.OfferID &&
-                    o.RestaurantID == order.RestaurantID);
+    //    // 🔥 SAFETY CHECK BEFORE ASSIGNING FK
+    //    if (bestOffer != null)
+    //    {
+    //        var offerExists = await _context.Offers
+    //            .AnyAsync(o =>
+    //                o.OfferID == bestOffer.OfferID &&
+    //                o.RestaurantID == order.RestaurantID);
 
-            if (offerExists)
-            {
-                order.DiscountAmount = Math.Round(bestDiscount, 2);
-                order.AppliedOfferID = bestOffer.OfferID;
-            }
-            else
-            {
-                order.DiscountAmount = 0;
-                order.AppliedOfferID = null;
-            }
-        }
-        else
-        {
-            order.DiscountAmount = 0;
-            order.AppliedOfferID = null;
-        }
-    }
+    //        if (offerExists)
+    //        {
+    //            order.DiscountAmount = Math.Round(bestDiscount, 2);
+    //            order.AppliedOfferID = bestOffer.OfferID;
+    //        }
+    //        else
+    //        {
+    //            order.DiscountAmount = 0;
+    //            order.AppliedOfferID = null;
+    //        }
+    //    }
+    //    else
+    //    {
+    //        order.DiscountAmount = 0;
+    //        order.AppliedOfferID = null;
+    //    }
+    //}
 
 
 
     private decimal CalculateDiscount(decimal baseAmount, Offer offer)
     {
+        decimal discount = 0;
+
         if (offer.DiscountType.Equals("PERCENT", StringComparison.OrdinalIgnoreCase))
         {
-            return baseAmount * (offer.DiscountPercent ?? 0) / 100m;
+            discount = baseAmount * (offer.DiscountPercent ?? 0) / 100m;
         }
-
-        if (offer.DiscountType.Equals("AMOUNT", StringComparison.OrdinalIgnoreCase))
+        else if (offer.DiscountType.Equals("AMOUNT", StringComparison.OrdinalIgnoreCase))
         {
-            return offer.DiscountAmount ?? 0m;
+            discount = offer.DiscountAmount ?? 0m;
         }
 
-        return 0m;
+        // 🔥 SAFETY GUARD: never allow discount >= subtotal
+        if (discount >= baseAmount)
+            discount = baseAmount * 0.9m; // max 90% discount
+
+        return Math.Round(discount, 2);
     }
 
 

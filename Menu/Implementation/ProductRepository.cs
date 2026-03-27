@@ -77,18 +77,37 @@ public class ProductRepository : IProductRepository
 
     public async Task<Product> AddProductAsync(Product product, IFormFile imageFile)
     {
-        var subCategory = await _context.SubCategories.FindAsync(product.SubCategoryID);
-        if (subCategory == null)
-            throw new KeyNotFoundException("SubCategory not found.");
+        // 🔥 FIX 1: Handle 0 → null
+        if (product.SubCategoryID == 0)
+            product.SubCategoryID = null;
 
-        product.ImagePath = imageFile != null ? await UploadImageAsync(imageFile) : null;
-        product.ProductDescription = string.IsNullOrWhiteSpace(product.ProductDescription) ? null : product.ProductDescription;
+        // 🔥 FIX 2: Validate ONLY if provided
+        if (product.SubCategoryID.HasValue)
+        {
+            var subCategory = await _context.SubCategories
+                .FirstOrDefaultAsync(s =>
+                    s.SubCategoryID == product.SubCategoryID &&
+                    s.RestaurantID == product.RestaurantID);
+
+            if (subCategory == null)
+                throw new KeyNotFoundException("Invalid SubCategory.");
+        }
+
+        // Image upload
+        product.ImagePath = imageFile != null
+            ? await UploadImageAsync(imageFile)
+            : null;
+
+        product.ProductDescription = string.IsNullOrWhiteSpace(product.ProductDescription)
+            ? null
+            : product.ProductDescription;
 
         product.CreatedAt = DateTime.UtcNow;
         product.UpdatedAt = DateTime.UtcNow;
 
         _context.Products.Add(product);
         await _context.SaveChangesAsync();
+
         return product;
     }
 

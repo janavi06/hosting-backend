@@ -102,9 +102,31 @@ namespace Restaurant_Menu.Repositories
                 .ToListAsync();
         }
 
+
+
+
         // Transactions (repository should NOT create transactions - controller owns transaction boundary)
         public async Task<StockTransaction> AddTransactionAsync(StockTransaction tx)
+
+
         {
+
+            switch (tx.TransactionType)
+            {
+                case StockTransactionType.Purchase:
+                case StockTransactionType.Return:
+                    tx.QuantityChange = Math.Abs(tx.QuantityChange);
+                    break;
+
+                case StockTransactionType.Waste:
+                case StockTransactionType.Sale:
+                    tx.QuantityChange = -Math.Abs(tx.QuantityChange);
+                    break;
+
+                case StockTransactionType.Adjustment:
+                    break;
+            }
+
             var item = await _context.InventoryItems
                 .FirstOrDefaultAsync(i =>
                     i.InventoryItemID == tx.InventoryItemID &&

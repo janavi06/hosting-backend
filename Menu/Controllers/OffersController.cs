@@ -13,13 +13,16 @@ namespace Restaurant_Menu.Controllers
     [Route("api/[controller]")]
     public class OfferController : ControllerBase
     {
+        private readonly IOrderRepository _orderRepository;
         private readonly IOfferRepository _repo;
         private readonly ApplicationDbContext _context;
 
-        public OfferController(IOfferRepository repo, ApplicationDbContext context)
+        public OfferController(IOfferRepository repo, ApplicationDbContext context, IOrderRepository orderRepository)
         {
             _repo = repo;
             _context = context;
+            _orderRepository = orderRepository;
+
         }
 
         [HttpPost]
@@ -106,7 +109,32 @@ namespace Restaurant_Menu.Controllers
             var offers = await _repo.GetActiveOffersAsync(restaurantId);
             return Ok(offers);
         }
+        [HttpGet("applicable")]
+        public async Task<IActionResult> GetApplicableOffers(
+    [FromQuery] int restaurantId,
+    [FromQuery] int orderId)
+        {
+            var order = await _context.Orders
+                .Include(o => o.OrderItems)
+                .FirstOrDefaultAsync(o =>
+                    o.OrderID == orderId &&
+                    o.RestaurantID == restaurantId);
 
+            if (order == null)
+                return NotFound("Order not found");
+
+            var productIds = order.OrderItems
+                .Select(i => i.ProductID)
+                .ToList();
+
+            var offers = await _repo.GetApplicableOffersAsync(
+                restaurantId,
+                order.Subtotal,
+                productIds);
+
+            return Ok(offers);
+        }
+      
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id, [FromQuery] int restaurantId)
         {

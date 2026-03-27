@@ -40,35 +40,45 @@ namespace Restaurant_System.Models
 
         [Required]
         [StringLength(200)]
-        public string Description { get; set; }
+        public string Description { get; set; } = string.Empty;
 
         [Required]
         public decimal Amount { get; set; }
 
         [Required]
-        public DateTime ExpenseDate { get; set; }
+        public DateTime ExpenseDate { get; set; } = DateTime.UtcNow;
 
         public PaymentMethod PaymentMethod { get; set; }
 
-        [StringLength(50)]
-        public string Vendor { get; set; }
-
-        [StringLength(100)]
-        public string ReceiptNumber { get; set; }
-
-        public string Notes { get; set; }
+        public string? Vendor { get; set; }
+        public string? ReceiptNumber { get; set; }
+        public string? Notes { get; set; }
 
         public bool IsRecurring { get; set; } = false;
+        public string? RecurringFrequency { get; set; }
 
-        public string RecurringFrequency { get; set; } // Monthly, Weekly, etc.
+        public string? ApprovedBy { get; set; }
 
-        public string ApprovedBy { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
-        public DateTime CreatedAt { get; set; }
-        public DateTime UpdatedAt { get; set; }
+        // 🔥 INVENTORY LINK
+        public int? InventoryItemID { get; set; }
 
-        // Navigation properties
+        [Column(TypeName = "decimal(18,4)")]
+        public decimal? Quantity { get; set; }
+
+        [Column(TypeName = "decimal(18,4)")]
+        public decimal? UnitCost { get; set; }
+
+        [Column(TypeName = "decimal(18,4)")]
+        public decimal? TotalCost { get; set; }
+
+        // Navigation
         [ForeignKey("RestaurantID")]
-        public Restaurant Restaurant { get; set; }
+        public Restaurant? Restaurant { get; set; }
+
+        [ForeignKey("InventoryItemID")]
+        public InventoryItem? InventoryItem { get; set; }
     }
 }

@@ -298,11 +298,11 @@ public class OrderController : ControllerBase
 
         _orderRepository.CalculateOrderAmounts(order);
 
-        if (!order.OfferLocked && order.AppliedOfferID == null)
-        {
-            await _orderRepository.ApplyBestAvailableOfferAsync(order);
-            _orderRepository.CalculateOrderAmounts(order);
-        }
+        //if (!order.OfferLocked && order.AppliedOfferID == null)
+        //{
+        //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
+        //    _orderRepository.CalculateOrderAmounts(order);
+        //}
 
         await _orderRepository.AddOrderAsync(order);
 
@@ -473,10 +473,10 @@ public class OrderController : ControllerBase
             return NotFound();
 
         _orderRepository.CalculateOrderAmounts(order);
-        if (!order.OfferLocked && order.AppliedOfferID == null)
-        {
-            await _orderRepository.ApplyBestAvailableOfferAsync(order);
-        }
+        //if (!order.OfferLocked && order.AppliedOfferID == null)
+        //{
+        //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
+        //}
 
         return Ok(new
         {
@@ -544,11 +544,13 @@ public class OrderController : ControllerBase
             // 🔹 STEP 1: Recalculate totals (very important)
             _orderRepository.CalculateOrderAmounts(order);
 
-            if (order.AppliedOfferID == null || order.AppliedOfferID == 0)
-            {
-                await _orderRepository.ApplyBestAvailableOfferAsync(order);
-                _orderRepository.CalculateOrderAmounts(order);
-            }
+            //if (order.AppliedOfferID == null || order.AppliedOfferID == 0)
+            //{
+            //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            //    _orderRepository.CalculateOrderAmounts(order);
+            //}
+            _orderRepository.CalculateOrderAmounts(order);
+            order.OfferLocked = true;
 
             order.OfferLocked = true;
 
@@ -1340,39 +1342,69 @@ public class OrderController : ControllerBase
 
     [HttpPost("{orderId}/pending")]
     public async Task<IActionResult> CreatePendingPayment(
-    int orderId,
-    [FromQuery] int restaurantId,
-    [FromBody] JsonElement payload)
+      int orderId,
+      [FromQuery] int restaurantId,
+      [FromBody] JsonElement payload)
     {
         var order = await _context.Orders
             .Include(o => o.Payments)
-            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+            .Include(o => o.OrderItems)
+            .FirstOrDefaultAsync(o =>
+                o.OrderID == orderId &&
+                o.RestaurantID == restaurantId);
 
         if (order == null)
-            return NotFound("Order not found");
+            return NotFound(new { message = "Order not found." });
 
+        // 🔥 Always recalc
+        _orderRepository.CalculateOrderAmounts(order);
+        await _context.SaveChangesAsync();
+
+        // 🔹 Paid so far
         var alreadyPaid = order.Payments
             .Where(p => p.PaymentStatus == PaymentStatus.Success)
             .Sum(p => p.Amount);
 
-        var remaining = order.TotalAmount - alreadyPaid;
+        var remaining = Math.Max(order.TotalAmount - alreadyPaid, 0);
 
         if (remaining <= 0)
-            return BadRequest("Order already fully paid");
+        {
+            return BadRequest(new
+            {
+                message = "Order already fully paid",
+                totalAmount = order.TotalAmount,
+                paidAmount = alreadyPaid
+            });
+        }
 
+        // 🔹 Get method
         string method = payload.TryGetProperty("method", out var m)
             ? m.GetString() ?? "Cash"
             : "Cash";
 
+        // 🔹 Get amount (IMPORTANT FIX)
+        decimal amount = payload.TryGetProperty("amount", out var amt)
+            ? amt.GetDecimal()
+            : remaining;
+
+        // 🔥 VALIDATION
+        if (amount <= 0)
+            return BadRequest("Invalid payment amount");
+
+        if (amount > remaining)
+            return BadRequest($"Amount exceeds remaining ₹{remaining}");
+
+        // 🔥 ALWAYS CREATE NEW PAYMENT (no reuse)
         var payment = new Payment
         {
             OrderID = orderId,
             TableNo = order.RestaurantTableID ?? 0,
-            Amount = remaining,
+            Amount = amount,
             PaymentMethod = method,
             PaymentStatus = PaymentStatus.Pending,
             RestaurantID = restaurantId,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            IsPartial = amount < remaining
         };
 
         _context.Payments.Add(payment);
@@ -1381,7 +1413,9 @@ public class OrderController : ControllerBase
         return Ok(new
         {
             paymentId = payment.PaymentID,
-            remainingAmount = remaining
+            amount = payment.Amount,
+            remainingAmount = remaining,
+            isPartial = payment.IsPartial
         });
     }
 
@@ -1445,25 +1479,12 @@ public class OrderController : ControllerBase
             return NotFound("Payment not found");
 
         payment.PaymentStatus = PaymentStatus.Success;
-        payment.PaymentMethod = "Cash";
         payment.CompletedAt = DateTime.UtcNow;
-        var otherPendingPayments = await _context.Payments
-    .Where(p =>
-        p.OrderID == payment.OrderID &&
-        p.PaymentStatus == PaymentStatus.Pending &&
-        p.PaymentID != payment.PaymentID)
-    .ToListAsync();
 
-        foreach (var p in otherPendingPayments)
+        // ✅ USE CENTRAL METHOD
+        if (payment.Order != null)
         {
-            p.PaymentStatus = PaymentStatus.Failed;
-        }
-
-
-        if (payment.Order != null && payment.Order.OrderStatus == OrderStatus.Served)
-        {
-            payment.Order.OrderStatus = OrderStatus.Completed;
-            payment.Order.ClosedAt = DateTime.UtcNow;
+            await RecalculatePaymentStatusAsync(payment.Order);
         }
 
         await _context.SaveChangesAsync();
@@ -1473,30 +1494,32 @@ public class OrderController : ControllerBase
 
     [HttpPost("{orderId}/initiate-payment")]
     public async Task<IActionResult> InitiatePayment(
-        int orderId,
-        [FromQuery] int restaurantId,
-        [FromBody] JsonElement payload,
-        [FromQuery] string method = "UPI",
-        [FromQuery] string channel = "Customer")
+     int orderId,
+     [FromQuery] int restaurantId,
+     [FromBody] JsonElement payload,
+     [FromQuery] string method = "UPI",
+     [FromQuery] string channel = "Customer")
     {
         var order = await _context.Orders
             .Include(o => o.Payments)
-            .Include(o => o.OrderItems) // Essential for price calc
-            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+            .Include(o => o.OrderItems)
+            .FirstOrDefaultAsync(o =>
+                o.OrderID == orderId &&
+                o.RestaurantID == restaurantId);
 
-        if (order == null) return NotFound(new { message = "Order not found." });
+        if (order == null)
+            return NotFound(new { message = "Order not found." });
 
-        // 🔥 FIX 1: Recalculate totals including any manual or auto-applied offers
+        // 🔥 Recalculate totals
         _orderRepository.CalculateOrderAmounts(order);
 
-        var alreadyPaid = order.Payments
+        var paid = order.Payments
             .Where(p => p.PaymentStatus == PaymentStatus.Success)
             .Sum(p => p.Amount);
 
-        // 🔥 FIX 2: This 'TotalAmount' is now the correctly discounted price from the server
-        var remainingAmount = order.TotalAmount - alreadyPaid;
+        var remaining = Math.Max(order.TotalAmount - paid, 0);
 
-        if (remainingAmount <= 0)
+        if (remaining <= 0)
         {
             return Ok(new
             {
@@ -1506,11 +1529,19 @@ public class OrderController : ControllerBase
             });
         }
 
-        decimal amount = payload.TryGetProperty("amount", out var amt) ? amt.GetDecimal() : remainingAmount;
+        // 🔹 Amount from frontend
+        decimal amount = payload.TryGetProperty("amount", out var amt)
+            ? amt.GetDecimal()
+            : remaining;
 
-        // Safety check: don't allow paying more than the discounted total
-        if (amount > remainingAmount) amount = remainingAmount;
+        // 🔥 VALIDATION
+        if (amount <= 0)
+            return BadRequest("Invalid payment amount");
 
+        if (amount > remaining)
+            return BadRequest($"Amount exceeds remaining ₹{remaining}");
+
+        // 🔥 ALWAYS CREATE NEW (no reuse)
         var payment = new Payment
         {
             OrderID = orderId,
@@ -1518,15 +1549,25 @@ public class OrderController : ControllerBase
             Amount = amount,
             PaymentMethod = method,
             PaymentStatus = PaymentStatus.Pending,
-            PaymentChannel = channel.Equals("Waiter", StringComparison.OrdinalIgnoreCase) ? PaymentChannel.Waiter : PaymentChannel.Customer,
+            PaymentChannel = channel.Equals("Waiter", StringComparison.OrdinalIgnoreCase)
+                ? PaymentChannel.Waiter
+                : PaymentChannel.Customer,
             RestaurantID = restaurantId,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            IsPartial = amount < remaining
         };
 
         _context.Payments.Add(payment);
         await _context.SaveChangesAsync();
 
-        return Ok(new { paymentId = payment.PaymentID, amount = payment.Amount, isFullyPaid = false });
+        return Ok(new
+        {
+            paymentId = payment.PaymentID,
+            amount = payment.Amount,
+            remainingAmount = remaining,
+            isPartial = payment.IsPartial,
+            isFullyPaid = false
+        });
     }
 
     [HttpGet("pending-payments")]
@@ -1853,87 +1894,87 @@ public class OrderController : ControllerBase
         return Ok(tables);
     }
 
-    [HttpGet("{orderId}/bill-html")]
-    public async Task<IActionResult> GetBillHtml(int orderId, [FromQuery] int restaurantId)
-    {
-        var order = await _context.Orders
-            .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
-            .Include(o => o.RestaurantTable)
-            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+//    [HttpGet("{orderId}/bill-html")]
+//    public async Task<IActionResult> GetBillHtml(int orderId, [FromQuery] int restaurantId)
+//    {
+//        var order = await _context.Orders
+//            .Include(o => o.OrderItems).ThenInclude(oi => oi.Product)
+//            .Include(o => o.RestaurantTable)
+//            .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
 
-        if (order == null)
-            return NotFound();
+//        if (order == null)
+//            return NotFound();
 
-        var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.RestaurantID == restaurantId);
-        _orderRepository.CalculateOrderAmounts(order);
-        await _orderRepository.ApplyBestAvailableOfferAsync(order);
-        await _context.SaveChangesAsync();
+//        var restaurant = await _context.Restaurants.FirstOrDefaultAsync(r => r.RestaurantID == restaurantId);
+//        _orderRepository.CalculateOrderAmounts(order);
+//        await _orderRepository.ApplyBestAvailableOfferAsync(order);
+//        await _context.SaveChangesAsync();
 
-        var istNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"));
+//        var istNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"));
 
-        var html = $@"<!DOCTYPE html>
-<html>
-<head>
-  <meta charset='UTF-8'>
-  <title>Order Bill #{order.OrderID}</title>
-  <style>
-    body {{
-      font-family: 'Segoe UI', sans-serif;
-      padding: 20px;
-      background: #fff;
-    }}
-    .bill-container {{ max-width: 700px; margin: auto; }}
-    .restaurant-header {{ text-align: center; }}
-    .restaurant-header h2 {{ margin: 0; }}
-    table {{ width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; }}
-    th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
-    th {{ background: #f2f2f2; }}
-    .totals {{ margin-top: 20px; text-align: right; }}
-    .footer {{ text-align: center; margin-top: 30px; font-size: 14px; color: #555; }}
-  </style>
-</head>
-<body>
-<div class='bill-container'>
-  <div class='restaurant-header'>
-    <h2>{restaurant?.Name ?? "Restaurant"}</h2>
-    <p>{restaurant?.Description ?? ""}</p>
-    <p>Date: {istNow:dd MMM yyyy hh:mm tt}</p>
-  </div>
-  <p><strong>Order ID:</strong> #{order.OrderID}</p>
-  <p><strong>Table No:</strong> {order.RestaurantTable?.TableName ?? "N/A"}</p>
-  <table>
-    <thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr></thead>
-    <tbody>";
+//        var html = $@"<!DOCTYPE html>
+//<html>
+//<head>
+//  <meta charset='UTF-8'>
+//  <title>Order Bill #{order.OrderID}</title>
+//  <style>
+//    body {{
+//      font-family: 'Segoe UI', sans-serif;
+//      padding: 20px;
+//      background: #fff;
+//    }}
+//    .bill-container {{ max-width: 700px; margin: auto; }}
+//    .restaurant-header {{ text-align: center; }}
+//    .restaurant-header h2 {{ margin: 0; }}
+//    table {{ width: 100%; margin-top: 20px; border-collapse: collapse; font-size: 14px; }}
+//    th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; }}
+//    th {{ background: #f2f2f2; }}
+//    .totals {{ margin-top: 20px; text-align: right; }}
+//    .footer {{ text-align: center; margin-top: 30px; font-size: 14px; color: #555; }}
+//  </style>
+//</head>
+//<body>
+//<div class='bill-container'>
+//  <div class='restaurant-header'>
+//    <h2>{restaurant?.Name ?? "Restaurant"}</h2>
+//    <p>{restaurant?.Description ?? ""}</p>
+//    <p>Date: {istNow:dd MMM yyyy hh:mm tt}</p>
+//  </div>
+//  <p><strong>Order ID:</strong> #{order.OrderID}</p>
+//  <p><strong>Table No:</strong> {order.RestaurantTable?.TableName ?? "N/A"}</p>
+//  <table>
+//    <thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr></thead>
+//    <tbody>";
 
-        int count = 1;
-        foreach (var item in order.OrderItems)
-        {
-            var total = item.Quantity * item.UnitPrice;
-            html += $"<tr><td>{count++}</td><td>{item.Product?.ProductName}</td><td>{item.Quantity}</td><td>₹{item.UnitPrice:N2}</td><td>₹{total:N2}</td></tr>";
-        }
+//        int count = 1;
+//        foreach (var item in order.OrderItems)
+//        {
+//            var total = item.Quantity * item.UnitPrice;
+//            html += $"<tr><td>{count++}</td><td>{item.Product?.ProductName}</td><td>{item.Quantity}</td><td>₹{item.UnitPrice:N2}</td><td>₹{total:N2}</td></tr>";
+//        }
 
-        html += $@"</tbody></table><div class='totals'>
-    <p>Subtotal: ₹{order.Subtotal:N2}</p>";
+//        html += $@"</tbody></table><div class='totals'>
+//    <p>Subtotal: ₹{order.Subtotal:N2}</p>";
 
-        if (order.AppliedOffer != null)
-            html += $"<p>Discount ({order.AppliedOffer.Description}): -₹{order.DiscountAmount:N2}</p>";
+//        if (order.AppliedOffer != null)
+//            html += $"<p>Discount ({order.AppliedOffer.Description}): -₹{order.DiscountAmount:N2}</p>";
 
-        html += $@"
-    <p>CGST: ₹{order.CGST:N2}</p>
-    <p>SGST: ₹{order.SGST:N2}</p>
-    <p>Service Charge: ₹{order.ServiceCharge:N2}</p>
-    <p><strong>Grand Total: ₹{order.TotalAmount:N2}</strong></p>
-  </div>
-  <div class='footer'>
-    <p>Thank you for dining with us!</p>
-    <p>Visit again 🙏</p>
-  </div>
-</div>
-</body>
-</html>";
+//        html += $@"
+//    <p>CGST: ₹{order.CGST:N2}</p>
+//    <p>SGST: ₹{order.SGST:N2}</p>
+//    <p>Service Charge: ₹{order.ServiceCharge:N2}</p>
+//    <p><strong>Grand Total: ₹{order.TotalAmount:N2}</strong></p>
+//  </div>
+//  <div class='footer'>
+//    <p>Thank you for dining with us!</p>
+//    <p>Visit again 🙏</p>
+//  </div>
+//</div>
+//</body>
+//</html>";
 
-        return Content(html, "text/html");
-    }
+//        return Content(html, "text/html");
+//    }
 
 
     [HttpPut("{orderId}/update-item/{itemId}")]
@@ -2205,10 +2246,10 @@ public class OrderController : ControllerBase
             // 9️⃣ Recalculate totals
             _orderRepository.CalculateOrderAmounts(order);
 
-            if (!order.OfferLocked && order.AppliedOfferID == null)
-                await _orderRepository.ApplyBestAvailableOfferAsync(order);
+            //if (!order.OfferLocked && order.AppliedOfferID == null)
+            //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
 
-            _orderRepository.CalculateOrderAmounts(order);
+            //_orderRepository.CalculateOrderAmounts(order);
 
             await _context.SaveChangesAsync();
 
@@ -2954,11 +2995,11 @@ public class OrderController : ControllerBase
         // 2️⃣ RECALCULATE: Ensure values are fresh and save them
         _orderRepository.CalculateOrderAmounts(order);
 
-        if (!order.OfferLocked && order.AppliedOfferID == null)
-        {
-            await _orderRepository.ApplyBestAvailableOfferAsync(order);
-            _orderRepository.CalculateOrderAmounts(order);
-        }
+        //if (!order.OfferLocked && order.AppliedOfferID == null)
+        //{
+        //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
+        //    _orderRepository.CalculateOrderAmounts(order);
+        //}
 
         // Guard against zero totals before printing
         if (order.TotalAmount <= 0)

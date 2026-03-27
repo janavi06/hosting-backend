@@ -14,7 +14,8 @@ public interface IOrderRepository
     Task<IEnumerable<Order>> GetPendingOrdersAsync(int restaurantId);
     Task<bool> UpdateOrderStatusAsync(int orderId, OrderStatus status);
     Task<List<Payment>> GetPendingPaymentsAsync(int restaurantId);
-    Task ApplyBestAvailableOfferAsync(Order order);
+    //Task ApplyBestAvailableOfferAsync(Order order);
+    Task<bool> ApplySpecificOfferAsync(Order order, int offerId);
     Task<bool> AssignWaiterToOrderAsync(int orderId, int waiterUserId);
     Task<int?> GetNextAvailableWaiterAsync(int restaurantId);
     void CalculateOrderAmounts(Order order);
@@ -27,6 +28,5 @@ public interface IOrderRepository
     Task<Order> RemoveItemFromOrderAsync(int orderId, int productId);
 
     Task<Order> UpdateOrderWithoutTrackingAsync(Order order); // ✅ ADD THIS
-    Task<bool> ApplySpecificOfferAsync(Order order, int offerId);
 
 }
