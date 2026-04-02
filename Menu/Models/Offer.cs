@@ -35,8 +35,7 @@ public class Offer
     public DateTime ValidTo { get; set; }
 
     public bool IsActive { get; set; } = true;
-    public bool AutoApply { get; set; } = true;
-
+    public bool AutoApply { get; set; } = false;
     public ICollection<OfferProduct> OfferProducts { get; set; } = new List<OfferProduct>();
 
     [ForeignKey(nameof(RestaurantID))]
