@@ -72,11 +72,10 @@ namespace Restaurant_Menu.Repositories
             var offers = await _context.Offers
                 .Include(o => o.OfferProducts)
                 .Where(o =>
-                    o.RestaurantID == restaurantId &&
-                    o.IsActive &&
-                    o.AutoApply &&
-                    o.ValidFrom <= now &&
-                    o.ValidTo >= now)
+    o.RestaurantID == restaurantId &&
+    o.IsActive &&
+    o.ValidFrom <= now &&
+    o.ValidTo >= now)
                 .ToListAsync();
 
             var applicable = offers.Where(o =>

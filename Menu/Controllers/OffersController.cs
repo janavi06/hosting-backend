@@ -41,7 +41,6 @@ namespace Restaurant_Menu.Controllers
                 return BadRequest("Invalid restaurantId");
 
             offer.RestaurantID = restaurantId;
-            offer.AutoApply = false;
 
             if (offer.ValidFrom >= offer.ValidTo)
                 return BadRequest("ValidFrom must be before ValidTo");

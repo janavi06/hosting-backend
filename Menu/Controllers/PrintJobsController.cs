@@ -16,7 +16,7 @@ public class PrintJobsController : ControllerBase
     public async Task<IActionResult> GetJobs()
     {
         var jobs = await _context.PrintJobs
-            .Where(j => j.Status == "PENDING")
+            .Where(j => j.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
             .OrderBy(j => j.CreatedAt)
             .Select(j => new
             {
@@ -36,7 +36,7 @@ public class PrintJobsController : ControllerBase
         var job = await _context.PrintJobs.FindAsync(id);
         if (job == null) return NotFound();
 
-        job.Status = "PRINTED";
+        job.Status = "Printed";
         job.PrintedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
