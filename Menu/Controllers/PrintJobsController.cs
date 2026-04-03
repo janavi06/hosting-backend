@@ -12,11 +12,13 @@ public class PrintJobsController : ControllerBase
         _context = context;
     }
 
+    // GET: api/print-jobs
     [HttpGet]
     public async Task<IActionResult> GetJobs()
     {
         var jobs = await _context.PrintJobs
-            .Where(j => j.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            .AsNoTracking() // ✅ performance optimization
+            .Where(j => EF.Functions.ILike(j.Status, "pending")) // ✅ FIXED
             .OrderBy(j => j.CreatedAt)
             .Select(j => new
             {
@@ -29,17 +31,19 @@ public class PrintJobsController : ControllerBase
         return Ok(jobs);
     }
 
-
+    // PUT: api/print-jobs/{id}/done
     [HttpPut("{id}/done")]
     public async Task<IActionResult> MarkDone(int id)
     {
         var job = await _context.PrintJobs.FindAsync(id);
-        if (job == null) return NotFound();
+        if (job == null)
+            return NotFound();
 
-        job.Status = "Printed";
+        job.Status = "printed"; // ✅ normalized lowercase
         job.PrintedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
-        return Ok();
+
+        return Ok(new { message = "Print job marked as done" });
     }
 }
