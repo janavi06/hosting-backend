@@ -1757,11 +1757,11 @@ public class OrderController : ControllerBase
 
     [HttpPost("{orderId}/initiate-payment")]
     public async Task<IActionResult> InitiatePayment(
-      int orderId,
-      [FromQuery] int restaurantId,
-      [FromQuery] string method = "UPI",
-      [FromQuery] string channel = "Customer",
-      [FromBody] JsonElement payload)
+   int orderId,
+   [FromQuery] int restaurantId,
+   [FromBody] JsonElement payload,
+   [FromQuery] string method = "UPI",
+   [FromQuery] string channel = "Customer")
     {
         try
         {
@@ -1778,7 +1778,7 @@ public class OrderController : ControllerBase
                 return NotFound("Order not found");
 
             decimal totalPaid = order.Payments?
-                .Where(p => p.Status == "SUCCESS")
+                .Where(p => p.PaymentStatus == PaymentStatus.Success)
                 .Sum(p => p.Amount) ?? 0;
 
             decimal remaining = order.TotalAmount - totalPaid;
@@ -1786,25 +1786,18 @@ public class OrderController : ControllerBase
             if (remaining <= 0)
                 return BadRequest("Nothing left to pay");
 
-            // ✅ SAFE AMOUNT PARSING
             decimal amount = remaining;
 
             if (payload.ValueKind == JsonValueKind.Object &&
                 payload.TryGetProperty("amount", out var amt))
             {
                 if (amt.ValueKind == JsonValueKind.Number)
-                {
                     amount = amt.GetDecimal();
-                }
                 else if (amt.ValueKind == JsonValueKind.String &&
                          decimal.TryParse(amt.GetString(), out var parsed))
-                {
                     amount = parsed;
-                }
                 else
-                {
                     return BadRequest("Invalid amount format");
-                }
             }
 
             if (amount <= 0)
@@ -1818,15 +1811,19 @@ public class OrderController : ControllerBase
                 OrderID = orderId,
                 RestaurantID = restaurantId,
                 Amount = amount,
-                Method = method,
-                Status = method.ToUpper() == "CASH" ? "SUCCESS" : "PENDING",
-                PaymentChannel = channel?.ToLower() == "waiter" ? 1 : 0,
+                PaymentMethod = method,
+                PaymentStatus = method.ToUpper() == "CASH"
+                    ? PaymentStatus.Success
+                    : PaymentStatus.Pending,
+                PaymentChannel = channel?.ToLower() == "waiter"
+                    ? PaymentChannel.Waiter
+                    : PaymentChannel.Customer,
                 CreatedAt = DateTime.UtcNow
             };
 
             _context.Payments.Add(payment);
 
-            if (payment.Status == "SUCCESS")
+            if (payment.PaymentStatus == PaymentStatus.Success)
             {
                 order.OrderStatus = OrderStatus.Completed;
                 order.UpdatedAt = DateTime.UtcNow;
@@ -1834,13 +1831,11 @@ public class OrderController : ControllerBase
 
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation($"✅ END initiate-payment | PaymentID={payment.PaymentID}");
-
             return Ok(new
             {
                 message = "Payment initiated successfully",
                 paymentID = payment.PaymentID,
-                status = payment.Status,
+                status = payment.PaymentStatus,
                 amount = payment.Amount
             });
         }
