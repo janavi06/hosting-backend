@@ -758,58 +758,29 @@ public class OrderController : ControllerBase
     //}
 
     [HttpPost("{orderId}/confirm")]
-    public async Task<IActionResult> ConfirmOrder(
-    int orderId,
-    [FromQuery] int restaurantId)
+    public async Task<IActionResult> ConfirmOrder(int orderId, [FromQuery] int restaurantId)
     {
-        _logger.LogInformation($"🚀 ConfirmOrder START | OrderID={orderId}, RestaurantID={restaurantId}");
+        _logger.LogInformation($"🚀 ConfirmOrder START | OrderID={orderId}");
 
-        if (restaurantId <= 0)
-        {
-            _logger.LogWarning("❌ Invalid restaurantId");
-            return BadRequest("restaurantId is required.");
-        }
+        if (restaurantId <= 0) return BadRequest("restaurantId is required.");
 
-        var restaurantExists = await _context.Restaurants
-            .AnyAsync(r => r.RestaurantID == restaurantId);
+        // 1. Fetch Order - Optimization: Use Split Query behavior if your repo allows
+        var order = await _orderRepository.GetOrderByIdWithItemsAsync(orderId, restaurantId);
 
-        if (!restaurantExists)
-        {
-            _logger.LogWarning("❌ Restaurant NOT found");
-            return BadRequest("Invalid restaurantId.");
-        }
+        if (order == null) return NotFound("Order not found.");
+        if (order.OrderStatus != OrderStatus.Pending) return BadRequest("Order already processed.");
 
-        var order = await _orderRepository
-            .GetOrderByIdWithItemsAsync(orderId, restaurantId);
-
-        if (order == null)
-        {
-            _logger.LogWarning("❌ Order NOT found");
-            return NotFound("Order not found.");
-        }
-
-        _logger.LogInformation($"📦 Order found | Status={order.OrderStatus}, Items={order.OrderItems?.Count}");
-
-        if (order.OrderStatus != OrderStatus.Pending)
-        {
-            _logger.LogWarning($"❌ Order already processed | Status={order.OrderStatus}");
-            return BadRequest("Order already processed.");
-        }
-
+        // 2. Transaction - Keep it as short as possible
         await using var tx = await _context.Database.BeginTransactionAsync();
-
         try
         {
-            _logger.LogInformation("🧮 Calculating order amounts...");
             _orderRepository.CalculateOrderAmounts(order);
-
             order.OfferLocked = true;
 
-            _logger.LogInformation("📉 Deducting inventory...");
+            // This method is likely where the 600ms delay is happening. 
+            // Ensure ProductID is indexed in your DB.
             await _inventoryRepository.DeductInventoryForOrderAsync(
-                order,
-                $"ORDER-{order.OrderNumber}",
-                order.UpdatedBy ?? "System"
+                order, $"ORDER-{order.OrderNumber}", order.UpdatedBy ?? "System"
             );
 
             order.OrderStatus = OrderStatus.Confirmed;
@@ -817,73 +788,52 @@ public class OrderController : ControllerBase
             order.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
-
-            _logger.LogInformation("✅ Order CONFIRMED successfully");
-
             await tx.CommitAsync();
-
-            // ================= KOT PRINT =================
-            _logger.LogInformation("🖨️ Checking KOT printer config...");
-
-            var printer = await GetPrinterConfig(restaurantId, "KOT");
-
-            if (printer == null)
-            {
-                _logger.LogError("❌ KOT PRINTER NOT FOUND IN DATABASE");
-            }
-            else
-            {
-                _logger.LogInformation($"✅ Printer Found: {printer.PrinterName}");
-
-                try
-                {
-                    var payload = new
-                    {
-                        Type = "KOT",
-                        PrinterName = printer.PrinterName,
-                        RestaurantName = printer.HeaderText,
-                        RestaurantAddress = printer.Address,
-
-                        Order = new
-                        {
-                            OrderNumber = order.OrderNumber.ToString(),
-                            TableNo = order.RestaurantTableID?.ToString() ?? "0",
-                            Items = order.OrderItems.Select(i => new
-                            {
-                                Name = i.Product?.ProductName ?? "Item",
-                                Qty = i.Quantity
-                            }).ToList()
-                        }
-                    };
-
-                    _logger.LogInformation("📤 Sending KOT to PrintJobs...");
-
-                    await SavePrintJob(restaurantId, payload);
-
-                    _logger.LogInformation("✅ KOT PRINT JOB SAVED SUCCESSFULLY");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "❌ ERROR while saving KOT print job");
-                }
-            }
-
-            _logger.LogInformation("🏁 ConfirmOrder END");
-
-            return Ok(new
-            {
-                message = "Order confirmed successfully",
-                orderID = order.OrderID
-            });
+            _logger.LogInformation("✅ Order Transaction Committed");
         }
         catch (Exception ex)
         {
             await tx.RollbackAsync();
-
-            _logger.LogError(ex, "🔥 ConfirmOrder FAILED");
-
-            return StatusCode(500, "Failed to confirm order.");
+            _logger.LogError(ex, "🔥 ConfirmOrder Transaction FAILED");
+            return StatusCode(500, "Database error during confirmation.");
         }
+
+        // 3. Printing - Run outside the transaction so failures don't roll back the order
+        var printer = await GetPrinterConfig(restaurantId, "KOT");
+        bool printQueued = false;
+
+        if (printer != null)
+        {
+            try
+            {
+                var payload = new
+                {
+                    Type = "KOT",
+                    PrinterName = printer.PrinterName,
+                    RestaurantName = printer.HeaderText,
+                    Order = new
+                    {
+                        OrderNumber = order.OrderNumber.ToString(),
+                        TableNo = order.RestaurantTableID?.ToString() ?? "0",
+                        Items = order.OrderItems.Select(i => new { Name = i.Product?.ProductName ?? "Item", Qty = i.Quantity }).ToList()
+                    }
+                };
+                await SavePrintJob(restaurantId, payload);
+                printQueued = true;
+            }
+            catch (Exception ex) { _logger.LogError(ex, "KOT Print Job failed to save."); }
+        }
+        else
+        {
+            _logger.LogWarning("❌ KOT Printer config not found. Order confirmed but not printed.");
+        }
+
+        return Ok(new
+        {
+            message = printQueued ? "Order confirmed and KOT sent." : "Order confirmed (Printer not configured).",
+            orderID = order.OrderID,
+            printStatus = printQueued ? "Success" : "PrinterNotFound"
+        });
     }
 
 
