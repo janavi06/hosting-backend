@@ -1707,86 +1707,106 @@ public class OrderController : ControllerBase
 
     [HttpPost("{orderId}/initiate-payment")]
     public async Task<IActionResult> InitiatePayment(
-   int orderId,
-   [FromQuery] int restaurantId,
-   [FromBody] JsonElement payload,
-   [FromQuery] string method = "UPI",
-   [FromQuery] string channel = "Customer")
+      int orderId,
+      [FromQuery] int restaurantId,
+      [FromQuery] string method = "UPI",
+      [FromQuery] string channel = "Customer",
+      [FromBody] JsonElement payload)
     {
+        _logger.LogInformation($"🚀 START initiate-payment | OrderID={orderId}, RestaurantID={restaurantId}");
+
         try
         {
-            _logger.LogInformation($"🚀 START initiate-payment | OrderID={orderId}, RestaurantID={restaurantId}");
-
             if (restaurantId <= 0)
-                return BadRequest("Invalid restaurantId");
+                return BadRequest("restaurantId is required");
 
+            // 🔹 STEP 1: Get Order + Existing Payments
             var order = await _context.Orders
                 .Include(o => o.Payments)
-                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+                .FirstOrDefaultAsync(o =>
+                    o.OrderID == orderId &&
+                    o.RestaurantID == restaurantId);
 
             if (order == null)
                 return NotFound("Order not found");
 
-            decimal totalPaid = order.Payments?
-                .Where(p => p.PaymentStatus == PaymentStatus.Success)
-                .Sum(p => p.Amount) ?? 0;
+            if (order.TotalAmount <= 0)
+                return BadRequest("Invalid order amount");
 
-            decimal remaining = order.TotalAmount - totalPaid;
+            // 🔹 STEP 2: Recalculate Payment Status
+            await RecalculatePaymentStatusAsync(order);
 
-            if (remaining <= 0)
-                return BadRequest("Nothing left to pay");
-
-            decimal amount = remaining;
-
-            if (payload.ValueKind == JsonValueKind.Object &&
-                payload.TryGetProperty("amount", out var amt))
+            if (order.RemainingAmount <= 0)
             {
-                if (amt.ValueKind == JsonValueKind.Number)
-                    amount = amt.GetDecimal();
-                else if (amt.ValueKind == JsonValueKind.String &&
-                         decimal.TryParse(amt.GetString(), out var parsed))
-                    amount = parsed;
-                else
-                    return BadRequest("Invalid amount format");
+                return BadRequest(new
+                {
+                    message = "Order already fully paid"
+                });
             }
 
-            if (amount <= 0)
-                return BadRequest("Invalid payment amount");
+            // 🔹 STEP 3: Prevent Duplicate Pending Payments (CRITICAL)
+            var existingPending = order.Payments
+                .FirstOrDefault(p => p.PaymentStatus == PaymentStatus.Pending);
 
-            if (amount > remaining)
-                amount = remaining;
+            if (existingPending != null)
+            {
+                _logger.LogWarning("⚠️ Existing pending payment found. Returning same session.");
 
+                return Ok(new
+                {
+                    message = "Payment already initiated",
+                    paymentId = existingPending.PaymentID,
+                    amount = existingPending.Amount,
+                    status = existingPending.PaymentStatus.ToString()
+                });
+            }
+
+            // 🔹 STEP 4: Calculate Amount
+            decimal amountToPay = order.RemainingAmount;
+
+            // Optional override from payload
+            if (payload.TryGetProperty("amount", out var amtProp))
+            {
+                var requestedAmount = amtProp.GetDecimal();
+
+                if (requestedAmount > 0 && requestedAmount <= order.RemainingAmount)
+                    amountToPay = requestedAmount;
+            }
+
+            bool isPartial = amountToPay < order.RemainingAmount;
+
+            // 🔹 STEP 5: Create Payment (NO UNIQUE CONSTRAINT NOW)
             var payment = new Payment
             {
                 OrderID = orderId,
                 RestaurantID = restaurantId,
-                Amount = amount,
+                Amount = amountToPay,
                 PaymentMethod = method,
-                PaymentStatus = method.ToUpper() == "CASH"
-                    ? PaymentStatus.Success
-                    : PaymentStatus.Pending,
-                PaymentChannel = channel?.ToLower() == "waiter"
-                    ? PaymentChannel.Waiter
-                    : PaymentChannel.Customer,
-                CreatedAt = DateTime.UtcNow
+                PaymentChannel = channel,
+                PaymentStatus = PaymentStatus.Pending,
+                IsPartial = isPartial,
+                CreatedAt = DateTime.UtcNow,
+                IsNotified = false,
+                TableNo = order.RestaurantTableID ?? 0
             };
 
             _context.Payments.Add(payment);
-
-            if (payment.PaymentStatus == PaymentStatus.Success)
-            {
-                order.OrderStatus = OrderStatus.Completed;
-                order.UpdatedAt = DateTime.UtcNow;
-            }
-
             await _context.SaveChangesAsync();
 
+            _logger.LogInformation($"✅ Payment created | PaymentID={payment.PaymentID}");
+
+            // 🔹 STEP 6: Return Response (UPI / QR ready)
             return Ok(new
             {
                 message = "Payment initiated successfully",
-                paymentID = payment.PaymentID,
-                status = payment.PaymentStatus,
-                amount = payment.Amount
+                paymentId = payment.PaymentID,
+                orderId = order.OrderID,
+                orderNumber = order.OrderNumber,
+                amount = payment.Amount,
+                isPartial = payment.IsPartial,
+                status = payment.PaymentStatus.ToString(),
+                method = payment.PaymentMethod,
+                channel = payment.PaymentChannel
             });
         }
         catch (Exception ex)
