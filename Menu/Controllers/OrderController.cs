@@ -1704,14 +1704,13 @@ public class OrderController : ControllerBase
 
         return Ok(new { message = "Payment completed successfully" });
     }
-
     [HttpPost("{orderId}/initiate-payment")]
     public async Task<IActionResult> InitiatePayment(
-      int orderId,
-      [FromQuery] int restaurantId,
-      [FromQuery] string method = "UPI",
-      [FromQuery] string channel = "Customer",
-      [FromBody] JsonElement payload)
+    int orderId,
+    [FromQuery] int restaurantId,
+    [FromBody] JsonElement payload,
+    [FromQuery] string method = "UPI",
+    [FromQuery] string channel = "Customer")
     {
         _logger.LogInformation($"🚀 START initiate-payment | OrderID={orderId}, RestaurantID={restaurantId}");
 
@@ -1720,7 +1719,6 @@ public class OrderController : ControllerBase
             if (restaurantId <= 0)
                 return BadRequest("restaurantId is required");
 
-            // 🔹 STEP 1: Get Order + Existing Payments
             var order = await _context.Orders
                 .Include(o => o.Payments)
                 .FirstOrDefaultAsync(o =>
@@ -1733,25 +1731,18 @@ public class OrderController : ControllerBase
             if (order.TotalAmount <= 0)
                 return BadRequest("Invalid order amount");
 
-            // 🔹 STEP 2: Recalculate Payment Status
             await RecalculatePaymentStatusAsync(order);
 
             if (order.RemainingAmount <= 0)
             {
-                return BadRequest(new
-                {
-                    message = "Order already fully paid"
-                });
+                return BadRequest(new { message = "Order already fully paid" });
             }
 
-            // 🔹 STEP 3: Prevent Duplicate Pending Payments (CRITICAL)
             var existingPending = order.Payments
                 .FirstOrDefault(p => p.PaymentStatus == PaymentStatus.Pending);
 
             if (existingPending != null)
             {
-                _logger.LogWarning("⚠️ Existing pending payment found. Returning same session.");
-
                 return Ok(new
                 {
                     message = "Payment already initiated",
@@ -1761,28 +1752,31 @@ public class OrderController : ControllerBase
                 });
             }
 
-            // 🔹 STEP 4: Calculate Amount
             decimal amountToPay = order.RemainingAmount;
 
-            // Optional override from payload
             if (payload.TryGetProperty("amount", out var amtProp))
             {
                 var requestedAmount = amtProp.GetDecimal();
-
                 if (requestedAmount > 0 && requestedAmount <= order.RemainingAmount)
                     amountToPay = requestedAmount;
             }
 
             bool isPartial = amountToPay < order.RemainingAmount;
 
-            // 🔹 STEP 5: Create Payment (NO UNIQUE CONSTRAINT NOW)
             var payment = new Payment
             {
                 OrderID = orderId,
                 RestaurantID = restaurantId,
                 Amount = amountToPay,
-                PaymentMethod = method,
-                PaymentChannel = channel,
+
+                // ✅ STRING (NOT ENUM)
+                PaymentMethod = method?.ToUpper() ?? "UPI",
+
+                // ✅ ENUM (correct)
+                PaymentChannel = Enum.TryParse<PaymentChannel>(channel, true, out var parsedChannel)
+          ? parsedChannel
+          : PaymentChannel.Customer,
+
                 PaymentStatus = PaymentStatus.Pending,
                 IsPartial = isPartial,
                 CreatedAt = DateTime.UtcNow,
@@ -1793,9 +1787,6 @@ public class OrderController : ControllerBase
             _context.Payments.Add(payment);
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation($"✅ Payment created | PaymentID={payment.PaymentID}");
-
-            // 🔹 STEP 6: Return Response (UPI / QR ready)
             return Ok(new
             {
                 message = "Payment initiated successfully",
@@ -1805,8 +1796,8 @@ public class OrderController : ControllerBase
                 amount = payment.Amount,
                 isPartial = payment.IsPartial,
                 status = payment.PaymentStatus.ToString(),
-                method = payment.PaymentMethod,
-                channel = payment.PaymentChannel
+                method = payment.PaymentMethod.ToString(),
+                channel = payment.PaymentChannel.ToString()
             });
         }
         catch (Exception ex)
