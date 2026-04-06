@@ -47,4 +47,3 @@ namespace Restaurant_Menu.Models
         public bool IsNotified { get; set; } = false;  // ✅ Added Property for Notifications
     }
 }
-a
