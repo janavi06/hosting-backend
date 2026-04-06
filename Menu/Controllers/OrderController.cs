@@ -646,116 +646,246 @@ public class OrderController : ControllerBase
         return Ok(orders);
     }
 
+    //[HttpPost("{orderId}/confirm")]
+    //public async Task<IActionResult> ConfirmOrder(
+    //    int orderId,
+    //    [FromQuery] int restaurantId)
+    //{
+    //    if (restaurantId <= 0)
+    //        return BadRequest("restaurantId is required.");
+
+    //    // Validate restaurant exists
+    //    var restaurantExists = await _context.Restaurants
+    //        .AnyAsync(r => r.RestaurantID == restaurantId);
+
+    //    if (!restaurantExists)
+    //        return BadRequest("Invalid restaurantId.");
+
+    //    var order = await _orderRepository
+    //        .GetOrderByIdWithItemsAsync(orderId, restaurantId);
+
+    //    if (order == null)
+    //        return NotFound("Order not found.");
+
+    //    if (order.OrderStatus != OrderStatus.Pending)
+    //        return BadRequest("Order already processed.");
+
+    //    await using var tx = await _context.Database.BeginTransactionAsync();
+
+    //    try
+    //    {
+    //        // 🔹 STEP 1: Recalculate totals (very important)
+    //        _orderRepository.CalculateOrderAmounts(order);
+
+    //        //if (order.AppliedOfferID == null || order.AppliedOfferID == 0)
+    //        //{
+    //        //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
+    //        //    _orderRepository.CalculateOrderAmounts(order);
+    //        //}
+    //        _orderRepository.CalculateOrderAmounts(order);
+    //        order.OfferLocked = true;
+
+    //        order.OfferLocked = true;
+
+
+    //        // 🔹 STEP 3: Deduct inventory
+    //        await _inventoryRepository.DeductInventoryForOrderAsync(
+    //            order,
+    //            $"ORDER-{order.OrderNumber}",
+    //            order.UpdatedBy ?? "System"
+    //        );
+
+    //        // 🔹 STEP 4: Update order status
+    //        order.OrderStatus = OrderStatus.Confirmed;
+    //        order.KitchenStatus = KitchenStatus.Pending;
+    //        order.UpdatedAt = DateTime.UtcNow;
+    //        order.UpdatedBy ??= "System";
+
+    //        await _context.SaveChangesAsync();
+
+    //        await tx.CommitAsync();
+
+    //        // 🔹 STEP 5: Send KOT print AFTER commit
+    //        var printer = await GetPrinterConfig(restaurantId, "KOT");
+
+    //        if (printer != null)
+    //        {
+    //            var payload = new
+    //            {
+    //                Type = "KOT",
+    //                PrinterName = printer.PrinterName,
+    //                RestaurantName = printer.HeaderText,
+    //                RestaurantAddress = printer.Address,
+    //                Footer = printer.FooterText ?? "",
+
+    //                Order = new
+    //                {
+    //                    OrderNumber = order.OrderNumber.ToString(),
+    //                    TableNo = order.RestaurantTableID?.ToString() ?? "0",
+    //                    Items = order.OrderItems.Select(i => new
+    //                    {
+    //                        Name = i.Product?.ProductName ?? "Item",
+    //                        Qty = i.Quantity,
+    //                        Modifiers = i.Customizations
+    //                            .Select(c => c.CustomizationOption?.Name)
+    //                            .Where(x => !string.IsNullOrEmpty(x))
+    //                            .ToList()
+    //                    }).ToList()
+    //                }
+    //            };
+
+    //            await SavePrintJob(restaurantId, payload);
+    //        }
+
+    //        return Ok(new
+    //        {
+    //            message = "Order confirmed successfully",
+    //            orderID = order.OrderID,
+    //            orderNumber = order.OrderNumber,
+    //            totalAmount = order.TotalAmount,
+    //            status = order.OrderStatus.ToString()
+    //        });
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        await tx.RollbackAsync();
+
+    //        _logger.LogError(ex,
+    //            $"ConfirmOrder failed for OrderID {orderId}, RestaurantID {restaurantId}");
+
+    //        return StatusCode(500, "Failed to confirm order.");
+    //    }
+    //}
+
     [HttpPost("{orderId}/confirm")]
     public async Task<IActionResult> ConfirmOrder(
-        int orderId,
-        [FromQuery] int restaurantId)
+    int orderId,
+    [FromQuery] int restaurantId)
     {
-        if (restaurantId <= 0)
-            return BadRequest("restaurantId is required.");
+        _logger.LogInformation($"🚀 ConfirmOrder START | OrderID={orderId}, RestaurantID={restaurantId}");
 
-        // Validate restaurant exists
+        if (restaurantId <= 0)
+        {
+            _logger.LogWarning("❌ Invalid restaurantId");
+            return BadRequest("restaurantId is required.");
+        }
+
         var restaurantExists = await _context.Restaurants
             .AnyAsync(r => r.RestaurantID == restaurantId);
 
         if (!restaurantExists)
+        {
+            _logger.LogWarning("❌ Restaurant NOT found");
             return BadRequest("Invalid restaurantId.");
+        }
 
         var order = await _orderRepository
             .GetOrderByIdWithItemsAsync(orderId, restaurantId);
 
         if (order == null)
+        {
+            _logger.LogWarning("❌ Order NOT found");
             return NotFound("Order not found.");
+        }
+
+        _logger.LogInformation($"📦 Order found | Status={order.OrderStatus}, Items={order.OrderItems?.Count}");
 
         if (order.OrderStatus != OrderStatus.Pending)
+        {
+            _logger.LogWarning($"❌ Order already processed | Status={order.OrderStatus}");
             return BadRequest("Order already processed.");
+        }
 
         await using var tx = await _context.Database.BeginTransactionAsync();
 
         try
         {
-            // 🔹 STEP 1: Recalculate totals (very important)
+            _logger.LogInformation("🧮 Calculating order amounts...");
             _orderRepository.CalculateOrderAmounts(order);
-
-            //if (order.AppliedOfferID == null || order.AppliedOfferID == 0)
-            //{
-            //    await _orderRepository.ApplyBestAvailableOfferAsync(order);
-            //    _orderRepository.CalculateOrderAmounts(order);
-            //}
-            _orderRepository.CalculateOrderAmounts(order);
-            order.OfferLocked = true;
 
             order.OfferLocked = true;
 
-
-            // 🔹 STEP 3: Deduct inventory
+            _logger.LogInformation("📉 Deducting inventory...");
             await _inventoryRepository.DeductInventoryForOrderAsync(
                 order,
                 $"ORDER-{order.OrderNumber}",
                 order.UpdatedBy ?? "System"
             );
 
-            // 🔹 STEP 4: Update order status
             order.OrderStatus = OrderStatus.Confirmed;
             order.KitchenStatus = KitchenStatus.Pending;
             order.UpdatedAt = DateTime.UtcNow;
-            order.UpdatedBy ??= "System";
 
             await _context.SaveChangesAsync();
 
+            _logger.LogInformation("✅ Order CONFIRMED successfully");
+
             await tx.CommitAsync();
 
-            // 🔹 STEP 5: Send KOT print AFTER commit
+            // ================= KOT PRINT =================
+            _logger.LogInformation("🖨️ Checking KOT printer config...");
+
             var printer = await GetPrinterConfig(restaurantId, "KOT");
 
-            if (printer != null)
+            if (printer == null)
             {
-                var payload = new
-                {
-                    Type = "KOT",
-                    PrinterName = printer.PrinterName,
-                    RestaurantName = printer.HeaderText,
-                    RestaurantAddress = printer.Address,
-                    Footer = printer.FooterText ?? "",
-
-                    Order = new
-                    {
-                        OrderNumber = order.OrderNumber.ToString(),
-                        TableNo = order.RestaurantTableID?.ToString() ?? "0",
-                        Items = order.OrderItems.Select(i => new
-                        {
-                            Name = i.Product?.ProductName ?? "Item",
-                            Qty = i.Quantity,
-                            Modifiers = i.Customizations
-                                .Select(c => c.CustomizationOption?.Name)
-                                .Where(x => !string.IsNullOrEmpty(x))
-                                .ToList()
-                        }).ToList()
-                    }
-                };
-
-                await SavePrintJob(restaurantId, payload);
+                _logger.LogError("❌ KOT PRINTER NOT FOUND IN DATABASE");
             }
+            else
+            {
+                _logger.LogInformation($"✅ Printer Found: {printer.PrinterName}");
+
+                try
+                {
+                    var payload = new
+                    {
+                        Type = "KOT",
+                        PrinterName = printer.PrinterName,
+                        RestaurantName = printer.HeaderText,
+                        RestaurantAddress = printer.Address,
+
+                        Order = new
+                        {
+                            OrderNumber = order.OrderNumber.ToString(),
+                            TableNo = order.RestaurantTableID?.ToString() ?? "0",
+                            Items = order.OrderItems.Select(i => new
+                            {
+                                Name = i.Product?.ProductName ?? "Item",
+                                Qty = i.Quantity
+                            }).ToList()
+                        }
+                    };
+
+                    _logger.LogInformation("📤 Sending KOT to PrintJobs...");
+
+                    await SavePrintJob(restaurantId, payload);
+
+                    _logger.LogInformation("✅ KOT PRINT JOB SAVED SUCCESSFULLY");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ ERROR while saving KOT print job");
+                }
+            }
+
+            _logger.LogInformation("🏁 ConfirmOrder END");
 
             return Ok(new
             {
                 message = "Order confirmed successfully",
-                orderID = order.OrderID,
-                orderNumber = order.OrderNumber,
-                totalAmount = order.TotalAmount,
-                status = order.OrderStatus.ToString()
+                orderID = order.OrderID
             });
         }
         catch (Exception ex)
         {
             await tx.RollbackAsync();
 
-            _logger.LogError(ex,
-                $"ConfirmOrder failed for OrderID {orderId}, RestaurantID {restaurantId}");
+            _logger.LogError(ex, "🔥 ConfirmOrder FAILED");
 
             return StatusCode(500, "Failed to confirm order.");
         }
     }
+
 
 
     [HttpGet("kitchen/pending-orders")]
@@ -1627,80 +1757,103 @@ public class OrderController : ControllerBase
 
     [HttpPost("{orderId}/initiate-payment")]
     public async Task<IActionResult> InitiatePayment(
-     int orderId,
-     [FromQuery] int restaurantId,
-     [FromBody] JsonElement payload,
-     [FromQuery] string method = "UPI",
-     [FromQuery] string channel = "Customer")
+      int orderId,
+      [FromQuery] int restaurantId,
+      [FromQuery] string method = "UPI",
+      [FromQuery] string channel = "Customer",
+      [FromBody] JsonElement payload)
     {
-        var order = await _context.Orders
-            .Include(o => o.Payments)
-            .Include(o => o.OrderItems)
-            .FirstOrDefaultAsync(o =>
-                o.OrderID == orderId &&
-                o.RestaurantID == restaurantId);
-
-        if (order == null)
-            return NotFound(new { message = "Order not found." });
-
-        // 🔥 Recalculate totals
-        _orderRepository.CalculateOrderAmounts(order);
-
-        var paid = order.Payments
-            .Where(p => p.PaymentStatus == PaymentStatus.Success)
-            .Sum(p => p.Amount);
-
-        var remaining = Math.Max(order.TotalAmount - paid, 0);
-
-        if (remaining <= 0)
+        try
         {
+            _logger.LogInformation($"🚀 START initiate-payment | OrderID={orderId}, RestaurantID={restaurantId}");
+
+            if (restaurantId <= 0)
+                return BadRequest("Invalid restaurantId");
+
+            var order = await _context.Orders
+                .Include(o => o.Payments)
+                .FirstOrDefaultAsync(o => o.OrderID == orderId && o.RestaurantID == restaurantId);
+
+            if (order == null)
+                return NotFound("Order not found");
+
+            decimal totalPaid = order.Payments?
+                .Where(p => p.Status == "SUCCESS")
+                .Sum(p => p.Amount) ?? 0;
+
+            decimal remaining = order.TotalAmount - totalPaid;
+
+            if (remaining <= 0)
+                return BadRequest("Nothing left to pay");
+
+            // ✅ SAFE AMOUNT PARSING
+            decimal amount = remaining;
+
+            if (payload.ValueKind == JsonValueKind.Object &&
+                payload.TryGetProperty("amount", out var amt))
+            {
+                if (amt.ValueKind == JsonValueKind.Number)
+                {
+                    amount = amt.GetDecimal();
+                }
+                else if (amt.ValueKind == JsonValueKind.String &&
+                         decimal.TryParse(amt.GetString(), out var parsed))
+                {
+                    amount = parsed;
+                }
+                else
+                {
+                    return BadRequest("Invalid amount format");
+                }
+            }
+
+            if (amount <= 0)
+                return BadRequest("Invalid payment amount");
+
+            if (amount > remaining)
+                amount = remaining;
+
+            var payment = new Payment
+            {
+                OrderID = orderId,
+                RestaurantID = restaurantId,
+                Amount = amount,
+                Method = method,
+                Status = method.ToUpper() == "CASH" ? "SUCCESS" : "PENDING",
+                PaymentChannel = channel?.ToLower() == "waiter" ? 1 : 0,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Payments.Add(payment);
+
+            if (payment.Status == "SUCCESS")
+            {
+                order.OrderStatus = OrderStatus.Completed;
+                order.UpdatedAt = DateTime.UtcNow;
+            }
+
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation($"✅ END initiate-payment | PaymentID={payment.PaymentID}");
+
             return Ok(new
             {
-                message = "Order already fully paid.",
-                isFullyPaid = true,
-                paymentId = -1
+                message = "Payment initiated successfully",
+                paymentID = payment.PaymentID,
+                status = payment.Status,
+                amount = payment.Amount
             });
         }
-
-        // 🔹 Amount from frontend
-        decimal amount = payload.TryGetProperty("amount", out var amt)
-            ? amt.GetDecimal()
-            : remaining;
-
-        // 🔥 VALIDATION
-        if (amount <= 0)
-            return BadRequest("Invalid payment amount");
-
-        if (amount > remaining)
-            return BadRequest($"Amount exceeds remaining ₹{remaining}");
-
-        // 🔥 ALWAYS CREATE NEW (no reuse)
-        var payment = new Payment
+        catch (Exception ex)
         {
-            OrderID = orderId,
-            TableNo = order.RestaurantTableID ?? 0,
-            Amount = amount,
-            PaymentMethod = method,
-            PaymentStatus = PaymentStatus.Pending,
-            PaymentChannel = channel.Equals("Waiter", StringComparison.OrdinalIgnoreCase)
-                ? PaymentChannel.Waiter
-                : PaymentChannel.Customer,
-            RestaurantID = restaurantId,
-            CreatedAt = DateTime.UtcNow,
-            IsPartial = amount < remaining
-        };
+            _logger.LogError(ex, "🔥 initiate-payment FAILED");
 
-        _context.Payments.Add(payment);
-        await _context.SaveChangesAsync();
-
-        return Ok(new
-        {
-            paymentId = payment.PaymentID,
-            amount = payment.Amount,
-            remainingAmount = remaining,
-            isPartial = payment.IsPartial,
-            isFullyPaid = false
-        });
+            return StatusCode(500, new
+            {
+                message = "Payment initiation failed",
+                error = ex.Message
+            });
+        }
     }
 
     [HttpGet("pending-payments")]
@@ -4208,15 +4361,45 @@ public class OrderController : ControllerBase
 
     private async Task SavePrintJob(int restaurantId, object payload)
     {
-        _context.PrintJobs.Add(new PrintJob
-        {
-            RestaurantID = restaurantId,
-            PayloadJson = JsonConvert.SerializeObject(payload),
-            Status = "Pending",   // FIX
-            CreatedAt = DateTime.UtcNow
-        });
+        _logger.LogInformation($"📥 SavePrintJob START | RestaurantID={restaurantId}");
 
-        await _context.SaveChangesAsync();
+        try
+        {
+            // 🔹 Serialize payload
+            string jsonPayload = JsonConvert.SerializeObject(payload);
+
+            _logger.LogInformation($"📄 Payload JSON: {jsonPayload}");
+
+            // 🔹 Create print job
+            var printJob = new PrintJob
+            {
+                RestaurantID = restaurantId,
+                PayloadJson = jsonPayload,
+                Status = "Pending",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _logger.LogInformation("🧾 PrintJob object created");
+
+            // 🔹 Add to DB context
+            _context.PrintJobs.Add(printJob);
+
+            _logger.LogInformation("📌 PrintJob added to DbContext");
+
+            // 🔹 Save to DB
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation($"✅ PrintJob SAVED | ID={printJob.PrintJobID}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ SavePrintJob FAILED");
+
+            // Optional: rethrow so API fails visibly
+            throw;
+        }
+
+        _logger.LogInformation("🏁 SavePrintJob END");
     }
 
     // Payment summary helper - copy into your controller (private)
