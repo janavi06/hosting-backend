@@ -19,6 +19,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 /*──────────────────────── 0. SERVICES ──────────────────────*/
 builder.Services.AddHttpClient();
+builder.Services.AddHostedService<SelfPingService>(); //  ADD THIS LINE
 builder.Services.AddScoped<IPrintForwarder, PrintForwarder>();
 builder.Services.AddScoped<ChatbotService>();
 
@@ -194,5 +195,6 @@ app.MapHub<OrderHub>("/hubs/order");
 
 /* Health check */
 app.MapGet("/", () => "✅ ScanUI backend is running!");
+app.MapGet("/api/health", () => "OK");
 
 app.Run();
